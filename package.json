@@ -1,0 +1,31 @@
+{
+  "name": "browser-automation-os",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser Automation OS - a reusable, generic browser automation platform (workflow engine + AI agent + Playwright workers) that other applications (e.g. a CRM) can drive via API/webhooks.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace=apps/web & npm run dev --workspace=apps/worker & wait",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:worker": "npm run dev --workspace=apps/worker",
+    "dev:test-site": "npm run dev --workspace=apps/test-site",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "worker": "npm run start --workspace=apps/worker",
+    "seed": "npm run seed --workspace=packages/database",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4",
+    "@types/node": "^22.9.0"
+  }
+}

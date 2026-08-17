@@ -14,6 +14,26 @@
 # Usage: in the Render dashboard, "New +" -> "Blueprint", point it at this
 # repo/branch. Fill in the secret env vars marked sync: false afterwards.
 #
+# --- Free plan caveat (worker) ----------------------------------------------
+# Both services below are set to `plan: free`. Free Render Web Services spin
+# down after ~15 minutes with no HTTP traffic and cold-start on the next
+# request. That's fine for the dashboard (a user hitting the URL wakes it),
+# but the WORKER is meant to run continuously and consume queued BullMQ jobs
+# even when nothing is browsing the dashboard — if it's asleep when a task is
+# enqueued, that task just sits in Redis until something wakes the service.
+#
+# Mitigation included in this repo: .github/workflows/keep-worker-warm.yml
+# pings the worker's /health endpoint every 10 minutes via a free GitHub
+# Actions schedule, keeping it from ever spinning down. Set a repo secret
+# named WORKER_HEALTH_URL (Settings -> Secrets and variables -> Actions) to
+# your deployed worker's health URL, e.g.
+# https://browser-automation-worker.onrender.com/health, and enable the
+# workflow. This keeps things running on the free plan; for anything beyond
+# testing, moving just the worker to a paid plan (Starter, ~$7/mo at time of
+# writing — check Render's current pricing) is the more reliable fix, since a
+# GitHub Actions ping still means the worker was briefly asleep between pings.
+# -----------------------------------------------------------------------------
+#
 # ---------------------------------------------------------------------------
 # If you MUST use Render's native Node runtime for the dashboard instead of
 # Docker (the worker should stay on Docker — it needs the Playwright/Chromium
@@ -42,7 +62,7 @@ services:
     runtime: docker
     dockerfilePath: ./apps/worker/Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
@@ -84,7 +104,7 @@ services:
     runtime: docker
     dockerfilePath: ./apps/web/Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
     envVars:
       - key: NODE_ENV
         value: production

@@ -1,0 +1,39 @@
+name: Keep worker warm (free Render plan)
+
+# Render's free Web Service plan spins a service down after ~15 minutes with
+# no HTTP traffic. The browser worker needs to stay running continuously to
+# consume queued BullMQ jobs, even when nobody is looking at the dashboard —
+# so on a free plan, this workflow pings its /health endpoint often enough
+# that it never gets the chance to sleep.
+#
+# Setup: add a repository secret named WORKER_HEALTH_URL pointing at your
+# deployed worker's health endpoint, e.g.
+#   https://browser-automation-worker.onrender.com/health
+# (Repo Settings -> Secrets and variables -> Actions -> New repository secret)
+#
+# This is a mitigation, not a substitute for a paid plan: the worker can
+# still be asleep for a few minutes between pings, delaying task pickup. For
+# production use, moving the worker service to a paid plan is more reliable.
+#
+# Note: GitHub only fires scheduled (cron) workflows from the repository's
+# default branch. If this is merged from a feature branch, the schedule
+# won't run until it lands on default — workflow_dispatch (the "Run workflow"
+# button under the Actions tab) still works from any branch for a manual test.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping worker health endpoint
+        run: |
+          if [ -z "${{ secrets.WORKER_HEALTH_URL }}" ]; then
+            echo "WORKER_HEALTH_URL secret is not set — skipping. See this workflow's comments for setup."
+            exit 0
+          fi
+          curl -fsS --max-time 20 "${{ secrets.WORKER_HEALTH_URL }}" || \
+            echo "Ping failed (worker may be cold-starting) — this is expected occasionally and not treated as a failure."

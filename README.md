@@ -198,6 +198,24 @@ against the whole monorepo, then builds just that one app).
 - This is the **only** piece that needs to be always-on with a real
   filesystem/browser — never deploy it as a Vercel function.
 
+**Using Render's free plan?** `render.yaml` is set to `plan: free` for both
+services. Free Web Services spin down after ~15 minutes of no HTTP traffic —
+fine for the dashboard (a visit wakes it), but the worker needs to be
+running continuously to consume queued BullMQ jobs, even with nobody looking
+at the dashboard. A task queued while it's asleep just waits until something
+wakes the service back up.
+
+Mitigation included here: `.github/workflows/keep-worker-warm.yml` pings the
+worker's `/health` endpoint every 10 minutes via GitHub Actions (free), so it
+never gets the chance to sleep. Set a repo secret `WORKER_HEALTH_URL` to your
+deployed worker's health URL (e.g. `https://browser-automation-worker.onrender.com/health`)
+under Settings → Secrets and variables → Actions, and enable the workflow.
+Note GitHub only runs *scheduled* workflows from the repo's default branch —
+merge this branch there, or trigger it manually via workflow_dispatch to test.
+This keeps a free plan usable for testing; for anything you actually depend
+on, moving just the worker to a paid plan (Starter, cheapest at time of
+writing) is more reliable than pinging around a sleep timer.
+
 ### 3b. If a Render build fails with "Cannot find name 'process'/'Buffer'"
 
 That signature means the build ran against a **stale cached `node_modules`**:

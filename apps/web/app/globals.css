@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222 25% 12%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 25% 12%;
+  --border: 220 16% 89%;
+  --muted: 220 20% 96%;
+  --muted-foreground: 220 9% 46%;
+  --primary: 222 89% 55%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 220 20% 96%;
+  --accent-foreground: 222 25% 12%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 152 60% 36%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 0 0% 100%;
+}
+
+.dark {
+  --background: 222 30% 8%;
+  --foreground: 210 20% 94%;
+  --card: 222 26% 11%;
+  --card-foreground: 210 20% 94%;
+  --border: 222 20% 20%;
+  --muted: 222 20% 15%;
+  --muted-foreground: 220 10% 65%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 222 30% 8%;
+  --accent: 222 20% 16%;
+  --accent-foreground: 210 20% 94%;
+  --destructive: 0 63% 50%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 152 55% 42%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 222 30% 8%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 999px;
+}

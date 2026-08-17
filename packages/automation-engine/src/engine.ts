@@ -26,6 +26,9 @@ export class WorkflowEngine {
     let currentNodeId: string | null = startNodeId;
 
     while (currentNodeId) {
+      if (await this.ctx.hooks.shouldCancel?.()) {
+        return { status: "cancelled", variables: state.variables, lastNodeId: currentNodeId };
+      }
       const node = findNode(this.ctx.definition, currentNodeId);
       let outcome: { next: string | null; end?: boolean; paused?: string };
 

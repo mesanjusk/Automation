@@ -44,6 +44,8 @@ export interface EngineHooks {
   requestHumanApproval(request: HumanApprovalRequest): Promise<"approved" | "rejected" | "pending">;
   deliverWebhook?(url: string, payload: Record<string, unknown>): Promise<void>;
   log?(message: string): void;
+  /** Checked before every node. Return true to stop the run (task was cancelled from the dashboard/API). */
+  shouldCancel?(): Promise<boolean> | boolean;
 }
 
 export interface EngineOptions {
@@ -52,7 +54,7 @@ export interface EngineOptions {
   visualFallback?: VisualFallback;
 }
 
-export type EngineRunStatus = "completed" | "failed" | "paused";
+export type EngineRunStatus = "completed" | "failed" | "paused" | "cancelled";
 
 export interface EngineRunResult {
   status: EngineRunStatus;

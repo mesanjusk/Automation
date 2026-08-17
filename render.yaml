@@ -1,0 +1,90 @@
+# Render Blueprint — deploys both the worker and (optionally) the web app as
+# Docker services built from the REPO ROOT, using apps/worker/Dockerfile and
+# apps/web/Dockerfile. This is deliberate: this repo is an npm workspaces
+# monorepo, and Render's native Node buildpack combined with a per-service
+# "Root Directory" set to a subfolder does NOT reliably install root-level
+# devDependencies (e.g. @types/node) or resolve sibling workspace packages —
+# it was designed for single-package repos. Docker with a repo-root build
+# context sidesteps that entirely: each Dockerfile COPYs the whole workspace
+# and runs a single `npm install --workspaces --include-workspace-root`.
+#
+# If you deploy the web app on Vercel instead (recommended — see README),
+# just remove/ignore the `web` service below and only apply the `worker` one.
+#
+# Usage: in the Render dashboard, "New +" -> "Blueprint", point it at this
+# repo/branch. Fill in the secret env vars marked sync: false afterwards.
+
+services:
+  - type: web
+    name: browser-automation-worker
+    runtime: docker
+    dockerfilePath: ./apps/worker/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: MAX_AI_ACTIONS
+        value: "100"
+      - key: STORAGE_PROVIDER
+        value: cloudinary
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: API_BASE_URL
+        sync: false
+      - key: WORKER_ID
+        value: worker-render-1
+      - key: WORKER_PORT
+        value: "4000"
+      - key: PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: BROWSER_MAX_CONCURRENCY
+        value: "3"
+
+  # Optional: deploy the dashboard here too instead of Vercel.
+  - type: web
+    name: browser-automation-web
+    runtime: docker
+    dockerfilePath: ./apps/web/Dockerfile
+    dockerContext: .
+    plan: starter
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: NEXTAUTH_SECRET
+        sync: false
+      - key: NEXTAUTH_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: STORAGE_PROVIDER
+        value: cloudinary
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: API_BASE_URL
+        sync: false

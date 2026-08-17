@@ -174,13 +174,27 @@ Copy the connection string into `REDIS_URL` for **both** the web and worker
 deployments — they must point at the same instance.
 
 ### 3. Worker → Render
-- New "Background Worker" (or Web Service, since it also serves `/health`)
-  on Render, pointed at `apps/worker/Dockerfile` (root context = repo root).
-- Set env vars from `.env.example`: `MONGODB_URI`, `REDIS_URL`,
-  `ENCRYPTION_KEY`, `GEMINI_API_KEY`, `STORAGE_PROVIDER` (`cloudinary` in
-  production — Render's disk isn't guaranteed persistent across deploys
-  unless you attach a persistent disk), `PLAYWRIGHT_HEADLESS=true`.
-- Health check path: `/health`.
+
+**Use the Docker environment, not Render's native Node buildpack.** This repo
+is an npm workspaces monorepo, and Render's native Node buildpack combined
+with a per-service "Root Directory" set to a subfolder (e.g. `apps/worker`)
+does not reliably install root-level devDependencies or resolve sibling
+`@bos/*` workspace packages — it's designed for single-package repos. The
+included `render.yaml` Blueprint avoids this entirely by building
+`apps/worker/Dockerfile` with the **repo root** as the Docker build context
+(the Dockerfile itself does one `npm install --workspaces --include-workspace-root`
+against the whole monorepo, then builds just that one app).
+
+- Easiest: in the Render dashboard, **New → Blueprint**, point it at this repo
+  — it reads `render.yaml` and creates the worker (and optionally web)
+  service correctly configured already. Fill in the secret env vars it lists
+  as `sync: false` (`MONGODB_URI`, `REDIS_URL`, `ENCRYPTION_KEY`,
+  `GEMINI_API_KEY`, `CLOUDINARY_*`, `API_BASE_URL`).
+- Manual setup instead: New → Web Service → **Environment: Docker** →
+  Dockerfile Path `apps/worker/Dockerfile` → Docker Build Context `.` (repo
+  root) → do **not** set a Root Directory. Health check path `/health`.
+- `STORAGE_PROVIDER=cloudinary` in production — Render's disk isn't
+  guaranteed persistent across deploys unless you attach a persistent disk.
 - This is the **only** piece that needs to be always-on with a real
   filesystem/browser — never deploy it as a Vercel function.
 

@@ -6,8 +6,11 @@ import { hashPassword } from "@bos/security";
 // One-time bootstrap: creates the first admin user so there's a way to log
 // in on a fresh deployment (no self-serve signup page exists by design).
 // Self-limiting: once any User document exists, this always 404s, so it
-// can't be used to mint additional accounts later.
-export async function POST() {
+// can't be used to mint additional accounts later. Answers GET too (in
+// addition to POST) purely so it can be triggered by opening the URL in a
+// browser — the idempotent guard above is what actually keeps this safe,
+// not the HTTP method.
+async function runSetup() {
   await dbConnect();
 
   const existing = await User.countDocuments();
@@ -22,3 +25,6 @@ export async function POST() {
 
   return NextResponse.json({ ok: true, email });
 }
+
+export const POST = runSetup;
+export const GET = runSetup;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { NODE_TYPES } from "../enums.js";
+import { NODE_TYPES } from "../enums";
 
 export const retryPolicySchema = z.object({
   maxRetries: z.number().int().min(0).max(20).default(0),

@@ -1,17 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { validateWorkflowDefinition, workflowDefinitionSchema } from "./workflow.js";
+import { validateWorkflowDefinition, workflowDefinitionSchema, workflowNodeSchema, type WorkflowNode } from "./workflow";
+import type { z } from "zod";
 
-function baseNode(overrides: Partial<Parameters<typeof workflowDefinitionSchema.parse>[0]["nodes"][number]> = {}) {
-  return {
+function baseNode(overrides: Partial<z.input<typeof workflowNodeSchema>> = {}): WorkflowNode {
+  return workflowNodeSchema.parse({
     id: "n1",
-    type: "NAVIGATE" as const,
+    type: "NAVIGATE",
     name: "Navigate",
     config: {},
-    timeout: 30000,
-    retry: { maxRetries: 0, delayMs: 1000, exponentialBackoff: true, maxDelayMs: 30000 },
-    continueOnError: false,
     ...overrides,
-  };
+  });
 }
 
 describe("workflowDefinitionSchema", () => {
@@ -26,8 +24,8 @@ describe("workflowDefinitionSchema", () => {
       startNodeId: "n1",
       nodes: [{ id: "n1", type: "END", name: "Done", config: {} }],
     });
-    expect(def.nodes[0].retry.maxRetries).toBe(0);
-    expect(def.nodes[0].timeout).toBe(30000);
+    expect(def.nodes[0]?.retry.maxRetries).toBe(0);
+    expect(def.nodes[0]?.timeout).toBe(30000);
   });
 
   it("rejects an unknown node type", () => {

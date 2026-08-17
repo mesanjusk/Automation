@@ -1,4 +1,4 @@
-import type { FailureCategory } from "./enums.js";
+import type { FailureCategory } from "./enums";
 
 export interface StructuredError {
   errorCode: string;

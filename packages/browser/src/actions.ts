@@ -1,8 +1,8 @@
 import path from "node:path";
 import type { NodeType, SelectorStrategy, WorkflowNode } from "@bos/shared";
-import type { BrowserSession } from "./session.js";
-import { resolveTarget, type VisualFallback } from "./selectorResolver.js";
-import { interpolate, interpolateTarget, interpolateWithSecrets } from "./interpolate.js";
+import type { BrowserSession } from "./session";
+import { resolveTarget, type VisualFallback } from "./selectorResolver";
+import { interpolate, interpolateTarget, interpolateWithSecrets } from "./interpolate";
 
 export interface BrowserActionContext {
   variables: Record<string, unknown>;

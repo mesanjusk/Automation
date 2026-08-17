@@ -1,9 +1,9 @@
 import { executeBrowserAction, BROWSER_NODE_TYPES } from "@bos/browser";
 import { AutomationError, type AgentAction, type WorkflowNode } from "@bos/shared";
-import { evaluateCondition } from "./condition.js";
-import { withRetry } from "./retry.js";
-import { agentActionToWorkflowNode } from "./aiActionAdapter.js";
-import { findNode, type EngineRunContext, type EngineRunResult } from "./types.js";
+import { evaluateCondition } from "./condition";
+import { withRetry } from "./retry";
+import { agentActionToWorkflowNode } from "./aiActionAdapter";
+import { findNode, type EngineRunContext, type EngineRunResult } from "./types";
 
 const BROWSER_NODE_TYPE_SET = new Set(BROWSER_NODE_TYPES);
 

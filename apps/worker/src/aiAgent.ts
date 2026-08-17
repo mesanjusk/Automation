@@ -33,7 +33,7 @@ export function buildAiDecisionHook(taskId: string, session: BrowserSession, all
       await AIRequest.create({
         taskId,
         provider: provider.name,
-        model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+        modelName: process.env.GEMINI_MODEL || "gemini-2.0-flash",
         prompt: `goal=${goal} url=${snapshot.url}`,
         response: rawResponse,
         action,
@@ -45,7 +45,7 @@ export function buildAiDecisionHook(taskId: string, session: BrowserSession, all
       await AIRequest.create({
         taskId,
         provider: provider.name,
-        model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+        modelName: process.env.GEMINI_MODEL || "gemini-2.0-flash",
         prompt: `goal=${goal} url=${snapshot.url}`,
         error: (err as Error).message,
         latencyMs: Date.now() - started,

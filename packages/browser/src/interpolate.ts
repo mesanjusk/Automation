@@ -33,7 +33,9 @@ export async function interpolateWithSecrets(
   let result = template;
   const matches = [...template.matchAll(secretPattern)];
   for (const match of matches) {
-    const value = (await resolveSecret(match[1])) ?? "";
+    const captured = match[1];
+    if (!captured) continue;
+    const value = (await resolveSecret(captured)) ?? "";
     result = result.replace(match[0], value);
   }
   return interpolate(result, variables);

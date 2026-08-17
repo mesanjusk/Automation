@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { StorageProvider, StoredFile } from "./provider.js";
+import type { StorageProvider, StoredFile } from "./provider";
 
 /**
  * Stores files on local disk. Suitable for development and for the worker's

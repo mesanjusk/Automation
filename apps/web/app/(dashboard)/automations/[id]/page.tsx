@@ -25,6 +25,7 @@ export default async function AutomationDetailPage({ params }: { params: { id: s
   const successRate = finished.length ? (finished.filter((t) => t.status === "COMPLETED").length / finished.length) * 100 : 0;
   const avgDuration = finished.length ? finished.reduce((s, t) => s + (t.duration ?? 0), 0) / finished.length : 0;
   const updateWithId = updateAutomation.bind(null, params.id);
+  const workflowRef = automation.workflowId as unknown as { _id?: string; name?: string } | undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -64,8 +65,8 @@ export default async function AutomationDetailPage({ params }: { params: { id: s
             <CardTitle>Workflow</CardTitle>
           </CardHeader>
           <CardContent>
-            <Link href={`/workflows/${(automation.workflowId as { _id?: string })?._id}`} className="text-sm font-medium hover:underline">
-              {(automation.workflowId as { name?: string } | undefined)?.name ?? "—"}
+            <Link href={`/workflows/${workflowRef?._id ?? ""}`} className="text-sm font-medium hover:underline">
+              {workflowRef?.name ?? "—"}
             </Link>
           </CardContent>
         </Card>

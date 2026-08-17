@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runAutomationRequestSchema, webhookEventSchema } from "./api.js";
+import { runAutomationRequestSchema, webhookEventSchema } from "./api";
 
 describe("runAutomationRequestSchema (validates POST /api/v1/automations/run bodies)", () => {
   it("accepts a minimal valid request", () => {

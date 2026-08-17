@@ -3,8 +3,8 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
-import { connectToDatabase, disconnectDatabase } from "./connection.js";
-import { User, ApiKey } from "./models/index.js";
+import { connectToDatabase, disconnectDatabase } from "./connection";
+import { User, ApiKey } from "./models/index";
 
 async function main() {
   await connectToDatabase();

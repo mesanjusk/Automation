@@ -1,10 +1,10 @@
-import type { StorageProvider } from "./provider.js";
-import { LocalStorageProvider } from "./localProvider.js";
-import { CloudinaryStorageProvider } from "./cloudinaryProvider.js";
+import type { StorageProvider } from "./provider";
+import { LocalStorageProvider } from "./localProvider";
+import { CloudinaryStorageProvider } from "./cloudinaryProvider";
 
-export * from "./provider.js";
-export * from "./localProvider.js";
-export * from "./cloudinaryProvider.js";
+export * from "./provider";
+export * from "./localProvider";
+export * from "./cloudinaryProvider";
 
 let cached: StorageProvider | null = null;
 

@@ -1,10 +1,10 @@
-export * from "./provider.js";
-export * from "./gemini.js";
-export * from "./safety.js";
-export * from "./promptBuilder.js";
+export * from "./provider";
+export * from "./gemini";
+export * from "./safety";
+export * from "./promptBuilder";
 
-import type { LLMProvider } from "./provider.js";
-import { GeminiProvider } from "./gemini.js";
+import type { LLMProvider } from "./provider";
+import { GeminiProvider } from "./gemini";
 
 let cachedProvider: LLMProvider | null = null;
 

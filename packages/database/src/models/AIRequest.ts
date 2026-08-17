@@ -4,7 +4,9 @@ export interface IAIRequest extends Document {
   taskId: Types.ObjectId;
   stepId?: string;
   provider: string;
-  model: string;
+  // Named modelName (not "model") to avoid colliding with Mongoose Document's
+  // own built-in .model() method.
+  modelName: string;
   prompt: string;
   response?: string;
   action?: Record<string, unknown>;
@@ -19,7 +21,7 @@ const AIRequestSchema = new Schema<IAIRequest>(
     taskId: { type: Schema.Types.ObjectId, ref: "Task", required: true },
     stepId: { type: String },
     provider: { type: String, required: true },
-    model: { type: String, required: true },
+    modelName: { type: String, required: true },
     prompt: { type: String, required: true },
     response: { type: String },
     action: { type: Schema.Types.Mixed },

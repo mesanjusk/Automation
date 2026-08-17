@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveTarget } from "./selectorResolver.js";
+import { resolveTarget } from "./selectorResolver";
 import type { Page } from "playwright";
 
 function fakeLocator(succeeds: boolean) {

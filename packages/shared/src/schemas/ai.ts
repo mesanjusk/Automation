@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AGENT_TOOLS } from "../enums.js";
+import { AGENT_TOOLS } from "../enums";
 
 // Strict schema the AI's structured output MUST validate against before any
 // tool is executed. Anything that fails this parse is rejected — the AI

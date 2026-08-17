@@ -1,6 +1,6 @@
 import { Queue, QueueEvents } from "bullmq";
 import { QUEUE_NAMES } from "@bos/shared";
-import { getRedisConnection } from "./connection.js";
+import { getRedisConnection } from "./connection";
 
 export interface AutomationTaskJobData {
   taskId: string;

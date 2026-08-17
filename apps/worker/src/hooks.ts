@@ -4,7 +4,7 @@ import { Execution, ExecutionStep, HumanIntervention, File as FileModel, Task } 
 import { getStorageProvider } from "@bos/storage";
 import { enqueueWebhook } from "@bos/queue";
 import type { AgentAction } from "@bos/shared";
-import { buildAiDecisionHook } from "./aiAgent.js";
+import { buildAiDecisionHook } from "./aiAgent";
 import type { BrowserSession } from "@bos/browser";
 
 export function buildEngineHooks(params: {

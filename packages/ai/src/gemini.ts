@@ -8,12 +8,12 @@ import {
   type VisionTargetResult,
   type WorkflowDefinition,
 } from "@bos/shared";
-import type { LLMProvider } from "./provider.js";
-import { buildAgentPrompt, buildVisionLocatePrompt, buildWorkflowGenerationPrompt } from "./promptBuilder.js";
+import type { LLMProvider } from "./provider";
+import { buildAgentPrompt, buildVisionLocatePrompt, buildWorkflowGenerationPrompt } from "./promptBuilder";
 
 function extractJson(text: string): string {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  return (fenced ? fenced[1] : text).trim();
+  return (fenced?.[1] ?? text).trim();
 }
 
 export class GeminiProvider implements LLMProvider {

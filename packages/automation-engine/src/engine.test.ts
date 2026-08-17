@@ -9,7 +9,7 @@ vi.mock("@bos/browser", () => ({
 
 const { WorkflowEngine } = await import("./engine.js");
 const { workflowDefinitionSchema } = await import("@bos/shared");
-import type { EngineHooks } from "./types.js";
+import type { EngineHooks } from "./types";
 
 function makeHooks(overrides: Partial<EngineHooks> = {}): EngineHooks {
   return {
@@ -108,7 +108,11 @@ describe("WorkflowEngine", () => {
   it("routes a browser node's output into the named variable and records the selector strategy used", async () => {
     executeBrowserAction.mockResolvedValueOnce({ output: { text: "In stock: 42" }, selectorStrategyUsed: "text" });
     const stepCompletions: unknown[] = [];
-    const hooks = makeHooks({ onStepComplete: vi.fn((e) => stepCompletions.push(e)) });
+    const hooks = makeHooks({
+      onStepComplete: vi.fn((e) => {
+        stepCompletions.push(e);
+      }),
+    });
     const definition = workflowDefinitionSchema.parse({
       startNodeId: "extract",
       nodes: [

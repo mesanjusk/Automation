@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import crypto from "node:crypto";
-import { deliverWebhook } from "./webhookDelivery.js";
+import { deliverWebhook } from "./webhookDelivery";
 
 describe("deliverWebhook", () => {
   beforeEach(() => {
@@ -14,7 +14,7 @@ describe("deliverWebhook", () => {
     await deliverWebhook("https://crm.example.com/hook", { event: "automation.completed" });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe("https://crm.example.com/hook");
     expect(JSON.parse(init.body)).toEqual({ event: "automation.completed" });
   });
@@ -26,7 +26,7 @@ describe("deliverWebhook", () => {
     const payload = { event: "automation.failed" };
     await deliverWebhook("https://crm.example.com/hook", payload, "shhh");
 
-    const [, init] = fetchMock.mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0]!;
     const expectedSignature = crypto.createHmac("sha256", "shhh").update(JSON.stringify(payload)).digest("hex");
     expect(init.headers["X-BOS-Signature"]).toBe(expectedSignature);
   });
@@ -36,7 +36,7 @@ describe("deliverWebhook", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await deliverWebhook("https://crm.example.com/hook", { event: "x" });
-    const [, init] = fetchMock.mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0]!;
     expect(init.headers["X-BOS-Signature"]).toBeUndefined();
   });
 

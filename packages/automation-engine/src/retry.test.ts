@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { withRetry } from "./retry.js";
+import { withRetry } from "./retry";
 import { AutomationError } from "@bos/shared";
 
 const policy = (overrides: Partial<Parameters<typeof withRetry>[1]> = {}) => ({

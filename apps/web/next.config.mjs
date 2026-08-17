@@ -2,9 +2,17 @@
 const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
-  // Playwright/BullMQ workers are never imported by the web app, but keep the
-  // trace bundling from choking if any transitive dep pulls in Node natives.
-  serverExternalPackages: ["mongoose"],
+  // These workspace packages ship untranspiled TypeScript (with .js-suffixed
+  // relative imports, per Node ESM convention) — transpilePackages makes
+  // Next's webpack build process them instead of treating them as opaque
+  // external modules, which is what resolves those .js imports to .ts files.
+  transpilePackages: ["@bos/shared", "@bos/database", "@bos/security", "@bos/queue", "@bos/storage", "@bos/ai"],
+  experimental: {
+    // Playwright/BullMQ workers are never imported by the web app, but keep
+    // the trace bundling from choking if any transitive dep pulls in Node
+    // natives (mongoose's optional drivers, etc).
+    serverComponentsExternalPackages: ["mongoose"],
+  },
   async headers() {
     return [
       {

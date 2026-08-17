@@ -3,10 +3,10 @@ import { Worker } from "bullmq";
 import { connectToDatabase } from "@bos/database";
 import { getRedisConnection, type AutomationTaskJobData, type WebhookJobData } from "@bos/queue";
 import { QUEUE_NAMES } from "@bos/shared";
-import { processTaskJob } from "./processor.js";
-import { deliverWebhook } from "./webhookDelivery.js";
-import { startHealthServer } from "./health.js";
-import { startScheduler } from "./scheduler.js";
+import { processTaskJob } from "./processor";
+import { deliverWebhook } from "./webhookDelivery";
+import { startHealthServer } from "./health";
+import { startScheduler } from "./scheduler";
 
 const WORKER_ID = process.env.WORKER_ID || `worker-${process.pid}`;
 const CONCURRENCY = Number(process.env.BROWSER_MAX_CONCURRENCY ?? 3);

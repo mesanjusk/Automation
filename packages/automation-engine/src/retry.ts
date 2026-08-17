@@ -29,7 +29,9 @@ export async function withRetry<T>(
 ): Promise<RetryOutcome<T>> {
   let lastError: unknown;
   const totalAttempts = policy.maxRetries + 1;
+  let attemptsMade = 0;
   for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+    attemptsMade = attempt;
     try {
       const result = await fn(attempt);
       return { result, attempts: attempt };
@@ -41,5 +43,5 @@ export async function withRetry<T>(
       await sleep(delayFor(policy, attempt));
     }
   }
-  return { attempts: totalAttempts, error: lastError };
+  return { attempts: attemptsMade, error: lastError };
 }

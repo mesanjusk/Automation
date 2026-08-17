@@ -1,5 +1,5 @@
 import { v2 as cloudinary } from "cloudinary";
-import type { StorageProvider, StoredFile } from "./provider.js";
+import type { StorageProvider, StoredFile } from "./provider";
 
 export class CloudinaryStorageProvider implements StorageProvider {
   readonly name = "cloudinary" as const;

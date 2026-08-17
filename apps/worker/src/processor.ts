@@ -6,8 +6,8 @@ import { BrowserSession } from "@bos/browser";
 import { WorkflowEngine } from "@bos/automation-engine";
 import { enqueueWebhook } from "@bos/queue";
 import type { WebhookEvent, WorkflowDefinition } from "@bos/shared";
-import { buildEngineHooks } from "./hooks.js";
-import { buildVisualFallback } from "./aiAgent.js";
+import { buildEngineHooks } from "./hooks";
+import { buildVisualFallback } from "./aiAgent";
 
 const WORKER_ID = process.env.WORKER_ID || `worker-${process.pid}`;
 

@@ -19,26 +19,12 @@ export const authOptions: AuthOptions = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials.password) {
-          console.error("[authorize] missing email or password in request");
-          return null;
-        }
-        try {
-          await dbConnect();
-        } catch (err) {
-          console.error("[authorize] dbConnect failed:", err);
-          return null;
-        }
+        if (!credentials?.email || !credentials.password) return null;
+        await dbConnect();
         const user = await User.findOne({ email: credentials.email.toLowerCase() }).select("+passwordHash");
-        if (!user) {
-          console.error("[authorize] no user found for email:", credentials.email.toLowerCase());
-          return null;
-        }
+        if (!user) return null;
         const valid = await verifyPassword(credentials.password, user.passwordHash);
-        if (!valid) {
-          console.error("[authorize] password mismatch for email:", credentials.email.toLowerCase());
-          return null;
-        }
+        if (!valid) return null;
         return { id: String(user._id), name: user.name, email: user.email, role: user.role } as never;
       },
     }),

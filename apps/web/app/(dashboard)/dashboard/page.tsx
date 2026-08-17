@@ -19,6 +19,14 @@ export default async function DashboardPage() {
     { label: "Pending approvals", value: stats.pendingApprovals, highlight: stats.pendingApprovals > 0 },
     { label: "Success rate", value: `${stats.successRate.toFixed(0)}%` },
     { label: "Avg. execution time", value: formatDuration(stats.avgDuration) },
+    {
+      label: "Worker status",
+      value:
+        stats.worker.state === "unconfigured"
+          ? "not configured"
+          : `${stats.worker.state}${stats.worker.workerId ? ` (${stats.worker.workerId})` : ""}`,
+      highlight: stats.worker.state === "degraded" || stats.worker.state === "unreachable",
+    },
   ];
 
   return (

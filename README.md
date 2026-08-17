@@ -198,6 +198,23 @@ against the whole monorepo, then builds just that one app).
 - This is the **only** piece that needs to be always-on with a real
   filesystem/browser — never deploy it as a Vercel function.
 
+### 3b. If a Render build fails with "Cannot find name 'process'/'Buffer'"
+
+That signature means the build ran against a **stale cached `node_modules`**:
+Render restored a cache from before a dependency change and plain
+`npm install` reported "up to date" without installing the new packages
+(`@types/node` et al.). Three layers of defense exist:
+
+1. **Use `npm ci` in any non-Docker Build Command** (e.g.
+   `npm ci && npm run build`) — it wipes `node_modules` and installs exactly
+   what `package-lock.json` pins, making a stale cache impossible.
+2. The root `npm run build` now runs `scripts/preflight.mjs` first, which
+   fails immediately with a clear message (instead of hundreds of TS errors)
+   if `@types/node`/`typescript` can't be resolved from every workspace.
+3. Or clear the Render service's build cache once (Manual Deploy → "Clear
+   build cache & deploy"). The Docker services in `render.yaml` are immune —
+   their `npm install` always runs inside a fresh build stage.
+
 ### 4. Web + API → Vercel
 - Import the repo, set the root directory to `apps/web` (or use
   `vercel.json` build settings pointing there) with the monorepo's root

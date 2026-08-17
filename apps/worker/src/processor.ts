@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import { Task, WorkflowVersion, BrowserProfile, Execution, File as FileModel, Credential } from "@bos/database";
+import { Task, WorkflowVersion, BrowserProfile, Execution, File as FileModel, Credential, Webhook } from "@bos/database";
 import { decrypt, decryptJSON, encryptJSON } from "@bos/security";
 import { BrowserSession } from "@bos/browser";
 import { WorkflowEngine } from "@bos/automation-engine";
@@ -59,7 +59,10 @@ export async function processTaskJob(taskId: string): Promise<void> {
     task.status = "RUNNING";
     await task.save();
 
-    const hooks = buildEngineHooks({ taskId: task.id, executionId: execution._id, session });
+    const allowedAiDomains = process.env.AI_ALLOWED_DOMAINS
+      ? process.env.AI_ALLOWED_DOMAINS.split(",").map((d) => d.trim()).filter(Boolean)
+      : undefined;
+    const hooks = buildEngineHooks({ taskId: task.id, executionId: execution._id, session, allowedAiDomains });
     const engine = new WorkflowEngine({
       definition,
       session,
@@ -67,7 +70,7 @@ export async function processTaskJob(taskId: string): Promise<void> {
       downloadDir,
       options: {
         maxAiActions: Number(process.env.MAX_AI_ACTIONS ?? 100),
-        allowedAiDomains: process.env.AI_ALLOWED_DOMAINS ? process.env.AI_ALLOWED_DOMAINS.split(",").map((d) => d.trim()) : undefined,
+        allowedAiDomains,
         visualFallback: buildVisualFallback(),
         resolveSecret: buildSecretResolver(profile?.id ? String(profile.id) : undefined),
       },
@@ -112,6 +115,18 @@ export async function processTaskJob(taskId: string): Promise<void> {
       execution.completedAt = new Date();
       await execution.save();
       await sendWebhook(task, "automation.cancelled", result.variables);
+    } else if (result.error?.category === "HUMAN_INTERVENTION_REQUIRED") {
+      // CAPTCHA / MFA / unknown page state: don't fail the task — pause it so
+      // a human can complete the blocking step (e.g. via the login-helper)
+      // and hit Resume, which re-enters the workflow at the same node.
+      task.status = "WAITING_FOR_HUMAN";
+      task.currentStepId = result.error.stepId ?? result.lastNodeId;
+      task.variables = result.variables;
+      task.error = result.error as Record<string, unknown>;
+      await task.save();
+      execution.status = "paused";
+      await execution.save();
+      await sendWebhook(task, "automation.human_intervention_required", result.variables, result.error as Record<string, unknown>);
     } else {
       task.status = "FAILED";
       task.error = result.error as Record<string, unknown>;
@@ -152,7 +167,6 @@ async function sendWebhook(
   result?: Record<string, unknown>,
   error?: Record<string, unknown>
 ): Promise<void> {
-  if (!task.callbackUrl) return;
   const files = await FileModel.find({ taskId: task.id }).select("_id name url").lean();
   const payload: WebhookEvent = {
     event,
@@ -164,7 +178,27 @@ async function sendWebhook(
     files: files.map((f) => ({ id: String(f._id), name: f.name, url: f.url })),
     timestamp: new Date().toISOString(),
   };
-  await enqueueWebhook({ webhookUrl: task.callbackUrl, payload });
+
+  // 1. The per-task callback URL (set by the caller of /api/v1/automations/run
+  //    or on the automation itself) — the primary CRM integration channel.
+  if (task.callbackUrl) {
+    await enqueueWebhook({ webhookUrl: task.callbackUrl, payload });
+  }
+
+  // 2. Webhook subscriptions registered from the dashboard (Webhooks page):
+  //    every enabled endpoint subscribed to this event, either globally or
+  //    scoped to this automation. Signed with the endpoint's secret if set.
+  const subscriptions = await Webhook.find({
+    enabled: true,
+    events: event,
+    $or: [{ automationId: { $exists: false } }, { automationId: null }, { automationId: task.automationId }],
+  }).select("+secret");
+  for (const hook of subscriptions) {
+    if (hook.url === task.callbackUrl) continue; // avoid double delivery
+    await enqueueWebhook({ webhookUrl: hook.url, secret: hook.secret ?? undefined, payload });
+    hook.lastDeliveryAt = new Date();
+    await hook.save();
+  }
 }
 
 /**

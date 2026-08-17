@@ -36,5 +36,36 @@ export async function getDashboardStats() {
     recentTasks: JSON.parse(JSON.stringify(recentTasks)) as Array<Record<string, unknown>>,
     avgDuration,
     successRate,
+    worker: await getWorkerHealth(),
   };
+}
+
+export interface WorkerHealth {
+  state: "healthy" | "degraded" | "unreachable" | "unconfigured";
+  workerId?: string;
+  redis?: string;
+  mongodb?: string;
+}
+
+/**
+ * Polls the worker's GET /health endpoint (observability requirement: the
+ * dashboard shows worker health). Configure WORKER_HEALTH_URL (e.g.
+ * https://browser-automation-worker.onrender.com/health). Unset means the
+ * card shows "not configured" instead of failing the page.
+ */
+async function getWorkerHealth(): Promise<WorkerHealth> {
+  const url = process.env.WORKER_HEALTH_URL;
+  if (!url) return { state: "unconfigured" };
+  try {
+    const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(2500) });
+    const body = (await res.json()) as { status?: string; workerId?: string; redis?: string; mongodb?: string };
+    return {
+      state: res.ok && body.status === "healthy" ? "healthy" : "degraded",
+      workerId: body.workerId,
+      redis: body.redis,
+      mongodb: body.mongodb,
+    };
+  } catch {
+    return { state: "unreachable" };
+  }
 }

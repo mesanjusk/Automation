@@ -13,6 +13,28 @@
 #
 # Usage: in the Render dashboard, "New +" -> "Blueprint", point it at this
 # repo/branch. Fill in the secret env vars marked sync: false afterwards.
+#
+# ---------------------------------------------------------------------------
+# If you MUST use Render's native Node runtime for the dashboard instead of
+# Docker (the worker should stay on Docker — it needs the Playwright/Chromium
+# system libraries baked into its base image), use this service definition.
+# `npm ci` is load-bearing: unlike `npm install`, it wipes node_modules and
+# installs exactly what package-lock.json says, which defeats the stale
+# build-cache failure mode where a restored cache reports "up to date" and
+# skips newly added dependencies. The root build also runs scripts/preflight.mjs
+# first, which fails fast with a clear message if the tree is stale anyway.
+#
+#   - type: web
+#     name: browser-automation-web-native
+#     runtime: node
+#     plan: starter
+#     buildCommand: npm ci && npm run build --workspace=apps/web
+#     startCommand: npm run start --workspace=apps/web
+#     envVars:
+#       - key: NODE_VERSION
+#         value: "20"
+#       ... (same envVars as the `web` service below)
+# ---------------------------------------------------------------------------
 
 services:
   - type: web
@@ -75,6 +97,11 @@ services:
       - key: NEXTAUTH_SECRET
         sync: false
       - key: NEXTAUTH_URL
+        sync: false
+      # Point at the worker service's /health so the dashboard's
+      # "Worker status" card works, e.g.
+      # https://browser-automation-worker.onrender.com/health
+      - key: WORKER_HEALTH_URL
         sync: false
       - key: GEMINI_API_KEY
         sync: false

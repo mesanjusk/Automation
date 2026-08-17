@@ -40,7 +40,9 @@ async function main() {
     console.error(`[worker] webhook job ${job?.id} failed (will retry):`, err.message);
   });
 
-  const httpServer = startHealthServer(Number(process.env.WORKER_PORT ?? 4000), WORKER_ID);
+  // Render (and most PaaS hosts) inject PORT and expect the service to bind
+  // it; fall back to WORKER_PORT / 4000 for local dev and docker-compose.
+  const httpServer = startHealthServer(Number(process.env.PORT ?? process.env.WORKER_PORT ?? 4000), WORKER_ID);
   const schedulerTimer = startScheduler();
 
   const shutdown = async () => {

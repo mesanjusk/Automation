@@ -3,6 +3,12 @@ import { dbConnect } from "@/lib/db";
 import { User } from "@bos/database";
 import { hashPassword } from "@bos/security";
 
+// Mutates state on every hit, so it must never be cached by the browser or
+// any intermediary — without this, a GET can appear to "succeed" repeatedly
+// from a cached response without the server having run again.
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+
 // One-time bootstrap: creates the first admin user so there's a way to log
 // in on a fresh deployment (no self-serve signup page exists by design).
 // Self-limiting: once any User document exists, this always 404s, so it

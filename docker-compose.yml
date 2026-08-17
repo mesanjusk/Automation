@@ -1,0 +1,84 @@
+name: browser-automation-os
+
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  test-site:
+    build:
+      context: .
+      dockerfile: apps/test-site/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "4100:4100"
+    environment:
+      TEST_SITE_PORT: 4100
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+      - redis
+    ports:
+      - "3000:3000"
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/browser_automation_os
+      REDIS_URL: redis://redis:6379
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-dev-secret-change-me}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      STORAGE_PROVIDER: local
+      LOCAL_STORAGE_DIR: /app/storage/local
+      API_BASE_URL: http://localhost:3000
+    volumes:
+      - local_storage:/app/storage/local
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+      - redis
+    ports:
+      - "4000:4000"
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/browser_automation_os
+      REDIS_URL: redis://redis:6379
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      STORAGE_PROVIDER: local
+      LOCAL_STORAGE_DIR: /repo/storage/local
+      API_BASE_URL: http://web:3000
+      WORKER_ID: worker-docker-1
+      WORKER_PORT: 4000
+      PLAYWRIGHT_HEADLESS: "true"
+      BROWSER_MAX_CONCURRENCY: 3
+      MAX_AI_ACTIONS: 100
+    volumes:
+      - local_storage:/repo/storage/local
+
+volumes:
+  mongo_data:
+  redis_data:
+  local_storage:

@@ -52,6 +52,7 @@ export interface EngineOptions {
   maxAiActions?: number;
   allowedAiDomains?: string[];
   visualFallback?: VisualFallback;
+  resolveSecret?: (name: string) => Promise<string | undefined>;
 }
 
 export type EngineRunStatus = "completed" | "failed" | "paused" | "cancelled";

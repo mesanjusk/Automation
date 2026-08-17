@@ -6,6 +6,7 @@ import { QUEUE_NAMES } from "@bos/shared";
 import { processTaskJob } from "./processor.js";
 import { deliverWebhook } from "./webhookDelivery.js";
 import { startHealthServer } from "./health.js";
+import { startScheduler } from "./scheduler.js";
 
 const WORKER_ID = process.env.WORKER_ID || `worker-${process.pid}`;
 const CONCURRENCY = Number(process.env.BROWSER_MAX_CONCURRENCY ?? 3);
@@ -40,9 +41,11 @@ async function main() {
   });
 
   const httpServer = startHealthServer(Number(process.env.WORKER_PORT ?? 4000), WORKER_ID);
+  const schedulerTimer = startScheduler();
 
   const shutdown = async () => {
     console.log("[worker] shutting down...");
+    clearInterval(schedulerTimer);
     await Promise.allSettled([taskWorker.close(), webhookWorker.close()]);
     httpServer.close();
     process.exit(0);

@@ -2,12 +2,14 @@ import path from "node:path";
 import type { NodeType, SelectorStrategy, WorkflowNode } from "@bos/shared";
 import type { BrowserSession } from "./session.js";
 import { resolveTarget, type VisualFallback } from "./selectorResolver.js";
-import { interpolate, interpolateTarget } from "./interpolate.js";
+import { interpolate, interpolateTarget, interpolateWithSecrets } from "./interpolate.js";
 
 export interface BrowserActionContext {
   variables: Record<string, unknown>;
   downloadDir: string;
   visualFallback?: VisualFallback;
+  /** Resolves {{secret:name}} tokens (credentials) just-in-time; never persisted to variables/logs. */
+  resolveSecret?: (name: string) => Promise<string | undefined>;
 }
 
 export interface BrowserActionResult {
@@ -71,7 +73,7 @@ export async function executeBrowserAction(
 
     case "TYPE": {
       const { locator, strategy } = await resolveTargetOrThrow(page, node, ctx);
-      const value = interpolate(cfg.value, ctx.variables);
+      const value = await interpolateWithSecrets(cfg.value, ctx.variables, ctx.resolveSecret);
       await locator.fill(value, { timeout: node.timeout || 10_000 });
       return { selectorStrategyUsed: strategy };
     }

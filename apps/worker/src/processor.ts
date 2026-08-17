@@ -1,7 +1,7 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import { Task, WorkflowVersion, BrowserProfile, Execution, File as FileModel } from "@bos/database";
-import { decryptJSON, encryptJSON } from "@bos/security";
+import { Task, WorkflowVersion, BrowserProfile, Execution, File as FileModel, Credential } from "@bos/database";
+import { decrypt, decryptJSON, encryptJSON } from "@bos/security";
 import { BrowserSession } from "@bos/browser";
 import { WorkflowEngine } from "@bos/automation-engine";
 import { enqueueWebhook } from "@bos/queue";
@@ -69,6 +69,7 @@ export async function processTaskJob(taskId: string): Promise<void> {
         maxAiActions: Number(process.env.MAX_AI_ACTIONS ?? 100),
         allowedAiDomains: process.env.AI_ALLOWED_DOMAINS ? process.env.AI_ALLOWED_DOMAINS.split(",").map((d) => d.trim()) : undefined,
         visualFallback: buildVisualFallback(),
+        resolveSecret: buildSecretResolver(profile?.id ? String(profile.id) : undefined),
       },
     });
 
@@ -164,4 +165,20 @@ async function sendWebhook(
     timestamp: new Date().toISOString(),
   };
   await enqueueWebhook({ webhookUrl: task.callbackUrl, payload });
+}
+
+/**
+ * Resolves {{secret:credentialName}} tokens for the browser executor.
+ * Decrypts just-in-time and returns the plaintext directly to Playwright —
+ * it is never written into engine variables, so it can't leak into an AI
+ * prompt, an ExecutionStep log, or a webhook payload.
+ */
+function buildSecretResolver(browserProfileId?: string) {
+  return async (name: string): Promise<string | undefined> => {
+    const query: Record<string, unknown> = { name };
+    if (browserProfileId) query.browserProfileId = browserProfileId;
+    const credential = await Credential.findOne(query).select("+encryptedValue");
+    if (!credential) return undefined;
+    return decrypt(credential.encryptedValue);
+  };
 }

@@ -12,6 +12,33 @@ export function interpolate(template: string | undefined, variables: Record<stri
   });
 }
 
+/**
+ * Like interpolate(), but also resolves {{secret:credentialName}} tokens
+ * through an injected async resolver instead of the plain variable bag.
+ * Secrets resolved this way are substituted directly into the outgoing
+ * Playwright action and are NEVER written back into `variables` — so they
+ * never reach an AI prompt, an execution log, or a screenshot caption.
+ */
+export async function interpolateWithSecrets(
+  template: string | undefined,
+  variables: Record<string, unknown>,
+  resolveSecret?: (name: string) => Promise<string | undefined>
+): Promise<string> {
+  if (!template) return "";
+  const secretPattern = /\{\{\s*secret:([\w.-]+)\s*\}\}/g;
+  if (!resolveSecret || !secretPattern.test(template)) {
+    return interpolate(template, variables);
+  }
+  secretPattern.lastIndex = 0;
+  let result = template;
+  const matches = [...template.matchAll(secretPattern)];
+  for (const match of matches) {
+    const value = (await resolveSecret(match[1])) ?? "";
+    result = result.replace(match[0], value);
+  }
+  return interpolate(result, variables);
+}
+
 export function interpolateTarget<T extends Record<string, unknown>>(
   target: T,
   variables: Record<string, unknown>

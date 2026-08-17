@@ -88,6 +88,7 @@ export class WorkflowEngine {
             variables: state.variables,
             downloadDir: this.ctx.downloadDir,
             visualFallback: this.ctx.options.visualFallback,
+            resolveSecret: this.ctx.options.resolveSecret,
           }),
         node.retry,
         (attempt, err) => this.ctx.hooks.log?.(`Retry ${attempt} for step ${node.id}: ${(err as Error).message}`)
@@ -273,6 +274,7 @@ export class WorkflowEngine {
         variables: state.variables,
         downloadDir: this.ctx.downloadDir,
         visualFallback: this.ctx.options.visualFallback,
+            resolveSecret: this.ctx.options.resolveSecret,
       });
       if (action.resultVariable && result.output !== undefined) {
         state.variables[action.resultVariable] = result.output;

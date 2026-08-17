@@ -1,0 +1,247 @@
+# Browser Automation OS
+
+A generic, reusable browser-automation platform: a visual workflow engine, an
+AI (Gemini) browser agent, and long-running Playwright workers, all driven
+through an HTTP API so any other application — a CRM, an ERP, a cron job —
+can trigger and monitor automations without knowing anything about
+Playwright.
+
+It is **not** built around any one target site (Amazon, Instagram, etc). You
+define workflows once — login, navigate, extract, decide, download — against
+whatever websites you're authorized to automate, and reuse them.
+
+## Architecture
+
+```
+Web dashboard / Public API  (Next.js, Vercel)
+            |
+            |  enqueue task
+            v
+        Redis (BullMQ)
+            |
+            v
+   Browser Worker  (Node, Render — long-running, NOT serverless)
+            |
+            v
+   Playwright + Chromium  --->  target website
+            |
+            v
+        MongoDB (tasks, logs, screenshots, profiles, credentials)
+```
+
+The web app and the worker are **separate deployables** on purpose: Vercel
+serverless functions cannot host a long-lived Chromium process, so the
+worker always runs somewhere with a persistent process (Render, Fly, a VM,
+your own Docker host). They only share MongoDB and Redis.
+
+### Monorepo layout
+
+```
+/apps
+  /web         Next.js dashboard + public API (deploy to Vercel)
+  /worker      BullMQ consumer + Playwright + scheduler (deploy to Render)
+  /test-site   Tiny local fixture website used by the demo automation & e2e
+
+/packages
+  /shared              Zod schemas, enums, types shared everywhere
+  /database            Mongoose models + connection helper
+  /security            AES-256-GCM encryption, API key hashing, rate limiting
+  /browser             Playwright session mgmt, self-healing selector resolver, node executors
+  /ai                  Gemini abstraction, agent tool-call validation, NL->workflow generator
+  /automation-engine   The workflow graph interpreter (retries, branching, loops, AI, human approval)
+  /queue               BullMQ queue definitions + Redis connection
+  /storage             StorageProvider abstraction (local disk / Cloudinary)
+
+/scripts
+  seed-demo.ts         Seeds the "Demo Website Data Extraction" automation
+  login-helper.ts      Opens a real headed browser so you can log in manually
+```
+
+## Core concepts
+
+- **Workflow** — a graph of typed nodes (`NAVIGATE`, `CLICK`, `TYPE`,
+  `EXTRACT_TEXT`, `CONDITION`, `LOOP`, `FOR_EACH`, `AI_DECISION`,
+  `HUMAN_APPROVAL`, `WEBHOOK`, …). Versioned — saving never overwrites a
+  published version, it creates a new one.
+- **Automation** — a named, API-triggerable wrapper around a published
+  workflow (+ default browser profile / callback URL / schedule).
+- **Task** — one run of an automation. Goes through
+  `QUEUED → STARTING → RUNNING → COMPLETED|FAILED|CANCELLED`, or
+  `WAITING_FOR_HUMAN` if it hits a `HUMAN_APPROVAL` node or the AI agent
+  reports something like a CAPTCHA/MFA it can't handle itself.
+- **Browser Profile** — a persistent identity (cookies/localStorage,
+  viewport, locale, timezone), encrypted at rest, reusable across runs so you
+  don't have to log in every time.
+- **Credential** — an encrypted secret referenced from a workflow as
+  `{{secret:name}}`. Resolved just-in-time inside the worker and substituted
+  directly into the Playwright action — it is **never** written into the
+  variable bag, so it can't leak into an AI prompt, an execution log, or a
+  screenshot.
+- **AI agent** — only ever picks from a fixed, validated tool list
+  (`browser_click`, `browser_type`, …). It cannot execute arbitrary code. Every
+  action is schema-validated before it touches the browser, capped by
+  `MAX_AI_ACTIONS`, and optionally restricted to a domain allowlist.
+- **Self-healing selectors** — each element target tries, in order:
+  `data-testid` → CSS → role → text → aria-label → nearby text → XPath →
+  AI visual identification (Gemini vision, coordinates only as a last
+  resort). Whichever strategy actually worked is recorded on the execution
+  step.
+
+## Local development
+
+### Option A — Docker Compose (fastest)
+
+```bash
+cp .env.example .env
+# fill in ENCRYPTION_KEY (openssl rand -hex 32) and GEMINI_API_KEY at minimum
+docker compose up --build
+```
+
+This starts MongoDB, Redis, the test site (`:4100`), the worker (`:4000`,
+health at `/health`), and the web dashboard (`:3000`).
+
+Then, in another shell, seed an admin user and the demo automation:
+
+```bash
+npm install
+npm run seed          # creates an admin user + a bootstrap API key
+npm run seed:demo      # creates "Demo Website Data Extraction" against apps/test-site
+```
+
+Log in at `http://localhost:3000/login` with the admin credentials printed
+by `npm run seed`.
+
+### Option B — run everything natively
+
+Requires local MongoDB and Redis (or point `MONGODB_URI`/`REDIS_URL` at
+hosted ones).
+
+```bash
+npm install
+npm run seed
+npm run dev:test-site   # terminal 1
+npm run dev:worker      # terminal 2 — needs Playwright's Chromium: npx playwright install chromium
+npm run dev:web         # terminal 3
+```
+
+### Logging into a real (or the demo) website manually
+
+The dashboard's Profiles page can't drive a live remote browser window over
+HTTP by itself — instead, use the bundled CLI, which opens a **real, visible**
+Chromium window on your machine:
+
+```bash
+npm run login-helper -- --profile=<browserProfileId> --url=https://example.com/login
+```
+
+Log in (solve any CAPTCHA/MFA yourself — the platform never attempts to
+bypass these), then just close the window. The session (cookies +
+localStorage) is encrypted and saved onto that profile; any automation using
+it starts already logged in. The Profiles page also supports exporting /
+importing a profile's session as JSON if you need to move it between
+environments.
+
+### Tests
+
+```bash
+npm test
+```
+
+52 unit/integration tests cover workflow validation, the self-healing
+selector fallback chain, the retry/backoff policy, the engine's control flow
+(branching, loops, human-approval pausing, cancellation), BullMQ job
+shaping, request-schema validation for the public API, and webhook HMAC
+signing.
+
+### The local e2e fixture
+
+`apps/test-site` is a tiny Express site (login, search, results table,
+file download, a form, a success page) that exists purely so the platform
+has something safe to automate in tests and demos — never point a real
+automation at a third-party site inside a test suite. `npm run seed:demo`
+wires up a full login → search → extract → conditional-download workflow
+against it (demo credentials: `demo` / `demo123`, stored in the Credentials
+page as `test_site_password`).
+
+## Deployment
+
+### 1. MongoDB Atlas
+Create a cluster, a database user, and allow network access from both
+Vercel and Render. Copy the connection string into `MONGODB_URI`.
+
+### 2. Redis (Render Redis, Upstash, or any Redis-compatible provider)
+Copy the connection string into `REDIS_URL` for **both** the web and worker
+deployments — they must point at the same instance.
+
+### 3. Worker → Render
+- New "Background Worker" (or Web Service, since it also serves `/health`)
+  on Render, pointed at `apps/worker/Dockerfile` (root context = repo root).
+- Set env vars from `.env.example`: `MONGODB_URI`, `REDIS_URL`,
+  `ENCRYPTION_KEY`, `GEMINI_API_KEY`, `STORAGE_PROVIDER` (`cloudinary` in
+  production — Render's disk isn't guaranteed persistent across deploys
+  unless you attach a persistent disk), `PLAYWRIGHT_HEADLESS=true`.
+- Health check path: `/health`.
+- This is the **only** piece that needs to be always-on with a real
+  filesystem/browser — never deploy it as a Vercel function.
+
+### 4. Web + API → Vercel
+- Import the repo, set the root directory to `apps/web` (or use
+  `vercel.json` build settings pointing there) with the monorepo's root
+  `package.json` workspaces still resolvable — Vercel's npm/yarn/pnpm
+  monorepo support handles this automatically when the project root stays
+  at the repo root and "Root Directory" is set to `apps/web`.
+- Env vars: `MONGODB_URI`, `REDIS_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`
+  (your Vercel URL), `ENCRYPTION_KEY` (must match the worker's — it's how
+  cookies/credentials round-trip), `GEMINI_API_KEY`, `STORAGE_PROVIDER=cloudinary`
+  + `CLOUDINARY_*`.
+- The web app never launches Playwright — it only enqueues jobs and reads
+  MongoDB, so it's a perfectly ordinary Next.js deployment.
+
+### 5. Point your CRM at it
+```
+POST https://<your-app>.vercel.app/api/v1/automations/run
+X-API-Key: bos_live_...
+Content-Type: application/json
+
+{
+  "automation": "supplier-stock-check",
+  "input": { "products": ["P001", "P002"] },
+  "callbackUrl": "https://your-crm.com/api/automation/callback"
+}
+```
+Create the API key from the dashboard's **API** page. The worker POSTs a
+signed `automation.completed` / `automation.failed` / `automation.human_intervention_required`
+event to `callbackUrl` (or to any Webhook configured on the **Webhooks**
+page) when the task resolves.
+
+## Security notes
+
+- Credentials and browser-profile session state are encrypted at rest with
+  AES-256-GCM (`ENCRYPTION_KEY`, 32 random bytes — `openssl rand -hex 32`).
+  Never commit a real key.
+- API keys are stored as SHA-256 hashes, never in plaintext.
+- The AI agent only calls a fixed, schema-validated tool list — it cannot
+  run arbitrary code, and every action is checked against `MAX_AI_ACTIONS`
+  and (optionally) a domain allowlist before it reaches Playwright.
+- The platform never attempts to defeat CAPTCHA/MFA/bot-detection; any such
+  wall pauses the task as `WAITING_FOR_HUMAN` for a person to resolve.
+
+## What's intentionally out of scope for this pass
+
+Being upfront about the corners cut to keep this a coherent, working system
+rather than 38 half-finished sections:
+
+- **No in-browser live remote control** of a running Chromium session (e.g.
+  streaming it over WebRTC/VNC into the dashboard). The Live Sessions and
+  Task Detail pages show real-time status, logs and screenshots via polling,
+  and manual logins go through the `login-helper` CLI's real local browser
+  window instead.
+- The visual workflow builder edits a node's `config` as JSON rather than a
+  bespoke form per node type (30+ node types) — it's the same data either
+  way, just less hand-holding for the free-form fields.
+- The scheduler is a 60-second DB-poll loop inside the worker process, not a
+  separate cron service — simple, and needs no extra infrastructure, but
+  isn't sub-minute precision.
+- Rate limiting is in-memory per worker process; fine for a single API
+  instance, swap for a Redis-backed limiter if you scale the web app
+  horizontally.

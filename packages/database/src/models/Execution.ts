@@ -1,4 +1,5 @@
-import { Schema, model, models, type Document, type Model, type Types } from "mongoose";
+import mongoose, { type Document, type Model, type Types } from "mongoose";
+const { Schema, model, models } = mongoose;
 import { EXECUTION_STEP_STATUSES, type ExecutionStepStatus } from "@bos/shared";
 
 export interface IExecution extends Document {

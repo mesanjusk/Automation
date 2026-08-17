@@ -16,12 +16,19 @@ COPY packages/ai/package.json packages/ai/package.json
 COPY packages/automation-engine/package.json packages/automation-engine/package.json
 COPY packages/queue/package.json packages/queue/package.json
 COPY packages/storage/package.json packages/storage/package.json
-RUN npm install --workspaces --include-workspace-root
+RUN npm ci --workspaces --include-workspace-root
 
 COPY . .
+# Type-check gate only (build script is `tsc --noEmit`) — fail the image
+# build on a type error rather than shipping a broken image. The actual
+# runtime below runs via tsx, not this step's (nonexistent) output: the
+# workspace packages are consumed as raw TypeScript source (see each
+# package.json's "main": "./src/index.ts"), and Node's own ESM loader can
+# neither execute .ts files nor resolve extensionless relative imports —
+# tsx (esbuild) handles both transparently, exactly like `npm run dev:worker`.
 RUN npm run build --workspace=apps/worker
 
 ENV NODE_ENV=production
 ENV PLAYWRIGHT_HEADLESS=true
 EXPOSE 4000
-CMD ["node", "apps/worker/dist/index.js"]
+CMD ["npx", "tsx", "apps/worker/src/index.ts"]

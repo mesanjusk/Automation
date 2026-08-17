@@ -1,4 +1,5 @@
-import { Schema, model, models, type Document, type Model, type Types } from "mongoose";
+import mongoose, { type Document, type Model, type Types } from "mongoose";
+const { Schema, model, models } = mongoose;
 import { SCHEDULE_FREQUENCIES, type ScheduleFrequency } from "@bos/shared";
 
 export interface ISchedule extends Document {

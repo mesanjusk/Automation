@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "build": "tsc --noEmit",
+    "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -22,11 +22,11 @@
     "express": "^4.21.1",
     "dotenv": "^16.4.5",
     "playwright": "^1.48.2",
-    "cron-parser": "^4.9.0"
+    "cron-parser": "^4.9.0",
+    "tsx": "^4.19.2"
   },
   "devDependencies": {
     "typescript": "^5.6.3",
-    "tsx": "^4.19.2",
     "@types/express": "^5.0.0",
     "@types/node": "^22.9.0"
   }

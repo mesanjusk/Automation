@@ -16,7 +16,7 @@ COPY packages/ai/package.json packages/ai/package.json
 COPY packages/automation-engine/package.json packages/automation-engine/package.json
 COPY packages/queue/package.json packages/queue/package.json
 COPY packages/storage/package.json packages/storage/package.json
-RUN npm install --workspaces --include-workspace-root
+RUN npm ci --workspaces --include-workspace-root
 
 FROM deps AS build
 COPY . .

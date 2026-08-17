@@ -1,4 +1,5 @@
-import { Schema, model, models, type Document, type Model, type Types } from "mongoose";
+import mongoose, { type Document, type Model, type Types } from "mongoose";
+const { Schema, model, models } = mongoose;
 import { TASK_STATUSES, type TaskStatus } from "@bos/shared";
 
 export interface ITask extends Document {

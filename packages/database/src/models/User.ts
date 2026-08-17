@@ -1,4 +1,5 @@
-import { Schema, model, models, type Document, type Model } from "mongoose";
+import mongoose, { type Document, type Model } from "mongoose";
+const { Schema, model, models } = mongoose;
 
 export type UserRole = "admin" | "operator" | "viewer";
 

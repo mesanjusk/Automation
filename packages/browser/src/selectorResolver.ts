@@ -31,8 +31,7 @@ export async function resolveTarget(
 
   const usable = attempts.filter((a) => a.build() !== null);
   const errors: string[] = [];
-  for (let index = 0; index < usable.length; index++) {
-    const attempt = usable[index];
+  for (const [index, attempt] of usable.entries()) {
     const locator = attempt.build();
     if (!locator) continue;
     const remaining = totalTimeout - (Date.now() - started);

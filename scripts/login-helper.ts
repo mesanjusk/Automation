@@ -1,10 +1,10 @@
-// Opens a real, visible (headed) Chromium window so you can log into a
-// website by hand — solving CAPTCHAs/MFA yourself, exactly as the platform
-// requires — then saves the resulting session (cookies + localStorage) onto
-// a BrowserProfile, encrypted at rest, for automations to reuse.
+// Opens a real, visible Chromium window so you can log into websites by hand,
+// then saves the resulting session (cookies + localStorage) onto a BrowserProfile.
 //
 // Usage: npm run login-helper -- --profile=<browserProfileId> [--url=https://example.com/login]
 import "dotenv/config";
+import readline from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import { chromium } from "playwright";
 import { connectToDatabase, disconnectDatabase, BrowserProfile } from "@bos/database";
 import { encryptJSON, decryptJSON } from "@bos/security";
@@ -32,7 +32,8 @@ async function main() {
   const existingState = profile.encryptedStorageState ? decryptJSON(profile.encryptedStorageState) : undefined;
 
   console.log(`Opening a browser window for profile "${profile.name}"...`);
-  console.log("Log in manually (including any MFA/CAPTCHA), then simply CLOSE the browser window when done.");
+  console.log("Log in to the required sites in this same browser window.");
+  console.log("When finished, return to this terminal and press Enter. Do NOT close the browser first.");
 
   const browser = await chromium.launch({ headless: false });
   const context = await browser.newContext({
@@ -45,29 +46,25 @@ async function main() {
   const page = await context.newPage();
   await page.goto(startUrl);
 
-  await new Promise<void>((resolve) => {
-    context.on("close", () => resolve());
-    browser.on("disconnected", () => resolve());
-  });
+  const rl = readline.createInterface({ input, output });
+  await rl.question("Press Enter here after ChatGPT and Google Flow are both logged in... ");
+  rl.close();
 
-  // The context may already be closed by the user closing the window; guard
-  // against calling storageState() on a dead context.
-  try {
-    const state = await context.storageState();
-    profile.encryptedStorageState = encryptJSON(state);
-    profile.status = "ready";
-    profile.lastUsedAt = new Date();
-    await profile.save();
-    console.log(`Saved session for profile "${profile.name}". Automations using this profile will now start already logged in.`);
-  } catch (err) {
-    console.error("Could not read the session before the window closed:", err);
-  }
+  const state = await context.storageState();
+  profile.encryptedStorageState = encryptJSON(state);
+  profile.status = "ready";
+  profile.lastUsedAt = new Date();
+  await profile.save();
+  console.log(`Saved session for profile "${profile.name}". Status is now ready.`);
 
+  await browser.close();
   await disconnectDatabase();
-  process.exit(0);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error(err);
+  try {
+    await disconnectDatabase();
+  } catch {}
   process.exit(1);
 });

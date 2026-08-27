@@ -43,6 +43,13 @@ export interface EngineHooks {
    */
   requestHumanApproval(request: HumanApprovalRequest): Promise<"approved" | "rejected" | "pending">;
   deliverWebhook?(url: string, payload: Record<string, unknown>): Promise<void>;
+  /**
+   * Persists an extra, named screenshot captured *inside* a long-running node
+   * (Flow navigation, state waits). These fire as the transition happens —
+   * including on the failure path, where the node never returns a result — so
+   * every Flow transition is visible on the dashboard even for a failed run.
+   */
+  onScreenshot?(name: string, buffer: Buffer, meta?: Record<string, unknown>): Promise<void> | void;
   log?(message: string): void;
   /** Checked before every node. Return true to stop the run (task was cancelled from the dashboard/API). */
   shouldCancel?(): Promise<boolean> | boolean;

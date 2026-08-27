@@ -4,10 +4,10 @@ import { Task, WorkflowVersion, BrowserProfile, Execution, Credential } from "@b
 import { decrypt, decryptJSON, encryptJSON } from "@bos/security";
 import { BrowserSession } from "@bos/browser";
 import { WorkflowEngine } from "@bos/automation-engine";
-import { enqueueWebhook } from "@bos/queue";
 import type { WorkflowDefinition } from "@bos/shared";
 import { buildEngineHooks } from "./hooks";
 import { buildVisualFallback } from "./aiAgent";
+import { deliverWebhook } from "./webhookDelivery";
 
 const WORKER_ID = process.env.WORKER_ID || `worker-${process.pid}`;
 
@@ -41,9 +41,29 @@ export async function processTaskJob(taskId: string): Promise<void> {
     else { task.status = "FAILED"; task.completedAt = new Date(); task.error = result.error; }
     if (task.startedAt && task.completedAt) task.duration = task.completedAt.getTime() - task.startedAt.getTime(); await task.save();
     execution.status = task.status === "COMPLETED" ? "completed" : task.status === "FAILED" ? "failed" : task.status === "CANCELLED" ? "failed" : "running"; execution.completedAt = task.completedAt; await execution.save();
-    if (task.callbackUrl && ["COMPLETED","FAILED","CANCELLED"].includes(task.status)) await enqueueWebhook(task.callbackUrl, { taskId: String(task.id), status: task.status, output: task.output, error: task.error }, undefined);
+    if (task.callbackUrl && ["COMPLETED","FAILED","CANCELLED"].includes(task.status)) {
+      await notifyCallback(task.callbackUrl, { taskId: String(task.id), status: task.status, output: task.output, error: task.error }, taskInput);
+    }
   } catch (err) { console.error(`[worker] task ${task.id} crashed:`, err); await failTask(task.id, "WORKER_ERROR", (err as Error).message); execution.status = "failed"; execution.completedAt = new Date(); await execution.save(); }
   finally { if (session) { try { if (profile) { const state = await session.exportStorageState(); profile.encryptedStorageState = encryptJSON(state); profile.lastUsedAt = new Date(); await profile.save(); } } catch (e) { console.error("[worker] failed to persist browser profile:", e); } await session.close(); } }
+}
+
+/**
+ * Render tasks hand the callback to the webhook queue (retries, backoff).
+ * Local tasks have no Redis, so they post it directly — a failed post must not
+ * fail an otherwise-finished video.
+ */
+async function notifyCallback(url: string, payload: Record<string, unknown>, taskInput: Record<string, unknown>) {
+  try {
+    if (taskInput.executionTarget === "local") {
+      await deliverWebhook(url, payload);
+      return;
+    }
+    const { enqueueWebhook } = await import("@bos/queue");
+    await enqueueWebhook({ webhookUrl: url, payload });
+  } catch (err) {
+    console.error(`[worker] callback delivery to ${url} failed:`, (err as Error).message);
+  }
 }
 
 async function failTask(taskId: string, category: string, message: string) { await Task.findByIdAndUpdate(taskId, { status: "FAILED", completedAt: new Date(), error: { category, message } }); }

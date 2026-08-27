@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { NODE_TYPES } from "../enums";
+import { FAILURE_CATEGORIES, NODE_TYPES } from "../enums";
 
 export const retryPolicySchema = z.object({
   maxRetries: z.number().int().min(0).max(20).default(0),
@@ -21,6 +21,17 @@ export const selectorTargetSchema = z.object({
   testId: z.string().optional(),
   nth: z.number().int().min(0).optional(),
   frame: z.string().optional(),
+  /**
+   * Only ever bind to elements that are actually visible. Defaults to true.
+   * Without this a union selector like "textarea, [contenteditable]" binds to
+   * the first DOM match even when it is an offscreen/hidden node, and then
+   * waits forever for something that will never become visible.
+   */
+  visibleOnly: z.boolean().optional(),
+  /** Additionally require the element to be editable (inputs/composers). */
+  editable: z.boolean().optional(),
+  /** Try semantic strategies (role/text/aria-label) before raw CSS. */
+  preferSemantic: z.boolean().optional(),
 });
 export type SelectorTarget = z.infer<typeof selectorTargetSchema>;
 
@@ -75,6 +86,20 @@ export const nodeConfigSchema = z
     errorMessage: z.string().optional(),
     scrollDirection: z.enum(["up", "down", "top", "bottom"]).optional(),
     tabIndex: z.number().int().optional(),
+    // PROBE_PAGE / WAIT_FOR_STATE / FLOW_NAVIGATE
+    states: z.array(z.string()).optional(),
+    failStates: z.array(z.string()).optional(),
+    goalState: z.string().optional(),
+    pollMs: z.number().int().min(100).optional(),
+    maxSteps: z.number().int().min(1).max(50).optional(),
+    maxElements: z.number().int().min(1).max(500).optional(),
+    screenshotName: z.string().optional(),
+    screenshot: z.boolean().optional(),
+    requireNewVideo: z.boolean().optional(),
+    // FAIL
+    errorCode: z.string().optional(),
+    category: z.enum(FAILURE_CATEGORIES).optional(),
+    retryable: z.boolean().optional(),
   })
   .passthrough();
 export type NodeConfig = z.infer<typeof nodeConfigSchema>;

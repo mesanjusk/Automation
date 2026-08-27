@@ -60,8 +60,9 @@ your own Docker host). They only share MongoDB and Redis.
 ## Core concepts
 
 - **Workflow** — a graph of typed nodes (`NAVIGATE`, `CLICK`, `TYPE`,
-  `EXTRACT_TEXT`, `CONDITION`, `LOOP`, `FOR_EACH`, `AI_DECISION`,
-  `HUMAN_APPROVAL`, `WEBHOOK`, …). Versioned — saving never overwrites a
+  `EXTRACT_TEXT`, `PROBE_PAGE`, `WAIT_FOR_STATE`, `FLOW_NAVIGATE`,
+  `CONDITION`, `LOOP`, `FOR_EACH`, `AI_DECISION`, `HUMAN_APPROVAL`,
+  `WEBHOOK`, …). Versioned — saving never overwrites a
   published version, it creates a new one.
 - **Automation** — a named, API-triggerable wrapper around a published
   workflow (+ default browser profile / callback URL / schedule).
@@ -85,7 +86,29 @@ your own Docker host). They only share MongoDB and Redis.
   `data-testid` → CSS → role → text → aria-label → nearby text → XPath →
   AI visual identification (Gemini vision, coordinates only as a last
   resort). Whichever strategy actually worked is recorded on the execution
-  step.
+  step. Matches are restricted to elements that are actually visible (set
+  `visibleOnly: false` to opt out), `editable: true` skips past read-only
+  look-alikes, and `preferSemantic: true` tries role/text/aria before CSS.
+- **Live page discovery** — `PROBE_PAGE` inspects the real DOM and reports
+  every visible control with its role, accessible name, aria-label,
+  editability and a generated selector. Workflows interpolate what it found
+  (`{{flowUi.composer.cssPath}}`) instead of hard-coding selectors for an app
+  whose markup changes underneath them.
+- **State-aware site drivers** — `FLOW_NAVIGATE` classifies whichever Google
+  Flow screen is really on display (landing / Google sign-in / project
+  workspace / generation UI / generating / clip ready / error) and advances
+  through it, and `WAIT_FOR_STATE` polls that observed state within a bounded
+  timeout instead of sleeping for a fixed period. Each transition is
+  screenshotted under a stable name (`flow_landing`, `flow_after_create`,
+  `flow_workspace`, `flow_generation_ui`, `flow_prompt_submitted`,
+  `flow_generating`, `flow_clip_complete`, `flow_error`) so a failed run can be
+  diagnosed from the dashboard. A profile that is not signed in to Google
+  fails as `GOOGLE_LOGIN_REQUIRED`, not as a selector timeout.
+- **Video Studio** — idea → ChatGPT (the user's logged-in browser tab, no paid
+  API) → a structured shot-by-shot production plan → Google Flow, generating
+  every planned clip in order with the continuity lock carried into each
+  prompt. Runs with `executionTarget: "local"`, which the worker claims by
+  polling MongoDB — no Redis, so cloud/Render automations are unaffected.
 
 ## Local development
 

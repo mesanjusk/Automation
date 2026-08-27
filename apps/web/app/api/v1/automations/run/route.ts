@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { authenticateApiRequest, auditApiAction } from "@/lib/apiAuth";
 import { dbConnect } from "@/lib/db";
 import { Automation, Workflow, Task } from "@bos/database";
-import { enqueueAutomationTask } from "@bos/queue";
+import { dispatchTask } from "@/lib/dispatch";
 import { runAutomationRequestSchema } from "@bos/shared";
 
 export async function POST(req: Request) {
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
     source: "api",
   });
 
-  await enqueueAutomationTask(String(task._id), { priority });
+  await dispatchTask(String(task._id), { priority });
   await auditApiAction(auth.ctx.apiKeyId, "automations.run", "Task", String(task._id));
 
   return NextResponse.json({ taskId: String(task._id), status: task.status }, { status: 202 });

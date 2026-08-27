@@ -1,6 +1,6 @@
 import { executeBrowserAction, BROWSER_NODE_TYPES } from "@bos/browser";
 import { AutomationError, type AgentAction, type WorkflowNode } from "@bos/shared";
-import { evaluateCondition } from "./condition";
+import { evaluateCondition, resolveVariablePath } from "./condition";
 import { withRetry } from "./retry";
 import { agentActionToWorkflowNode } from "./aiActionAdapter";
 import { findNode, type EngineRunContext, type EngineRunResult } from "./types";
@@ -89,6 +89,8 @@ export class WorkflowEngine {
             downloadDir: this.ctx.downloadDir,
             visualFallback: this.ctx.options.visualFallback,
             resolveSecret: this.ctx.options.resolveSecret,
+            emitScreenshot: this.ctx.hooks.onScreenshot?.bind(this.ctx.hooks),
+            log: this.ctx.hooks.log?.bind(this.ctx.hooks),
           }),
         node.retry,
         (attempt, err) => this.ctx.hooks.log?.(`Retry ${attempt} for step ${node.id}: ${(err as Error).message}`)
@@ -144,7 +146,9 @@ export class WorkflowEngine {
       }
 
       case "FOR_EACH": {
-        const items = node.config.variableName ? state.variables[node.config.variableName] : undefined;
+        const items = node.config.variableName
+          ? resolveVariablePath(node.config.variableName, state.variables)
+          : undefined;
         const array = Array.isArray(items) ? items : [];
         if (node.config.bodyNodeId) {
           for (const item of array) {
@@ -202,10 +206,10 @@ export class WorkflowEngine {
 
       case "FAIL": {
         throw new AutomationError({
-          errorCode: "WORKFLOW_FAIL_NODE",
+          errorCode: node.config.errorCode ?? "WORKFLOW_FAIL_NODE",
           message: node.config.errorMessage ?? `Workflow explicitly failed at node "${node.id}"`,
-          category: "PERMANENT",
-          retryable: false,
+          category: node.config.category ?? "PERMANENT",
+          retryable: node.config.retryable ?? false,
           stepId: node.id,
         });
       }
@@ -274,7 +278,9 @@ export class WorkflowEngine {
         variables: state.variables,
         downloadDir: this.ctx.downloadDir,
         visualFallback: this.ctx.options.visualFallback,
-            resolveSecret: this.ctx.options.resolveSecret,
+        resolveSecret: this.ctx.options.resolveSecret,
+        emitScreenshot: this.ctx.hooks.onScreenshot?.bind(this.ctx.hooks),
+        log: this.ctx.hooks.log?.bind(this.ctx.hooks),
       });
       if (action.resultVariable && result.output !== undefined) {
         state.variables[action.resultVariable] = result.output;

@@ -2,9 +2,11 @@ import type { Types } from "mongoose";
 import type { EngineHooks, HumanApprovalRequest } from "@bos/automation-engine";
 import { Execution, ExecutionStep, HumanIntervention, File as FileModel, Task } from "@bos/database";
 import { getStorageProvider } from "@bos/storage";
-import { enqueueWebhook } from "@bos/queue";
 import type { AgentAction } from "@bos/shared";
 import { buildAiDecisionHook } from "./aiAgent";
+import { deliverWebhook as postWebhook } from "./webhookDelivery";
+
+const WORKER_TARGET = (process.env.WORKER_TARGET || "render").toLowerCase() === "local" ? "local" : "render";
 import type { BrowserSession } from "@bos/browser";
 
 export function buildEngineHooks(params: {
@@ -22,27 +24,26 @@ export function buildEngineHooks(params: {
       await Task.findByIdAndUpdate(taskId, { currentStepId: event.stepId });
     },
 
+    async onScreenshot(name, buffer, meta) {
+      // Named mid-step transitions (flow_landing, flow_generating, ...) get
+      // their own dashboard row so a failed run can be read back visually.
+      const screenshotId = await storeScreenshot(taskId, name, buffer, name);
+      await ExecutionStep.create({
+        executionId,
+        taskId,
+        stepId: name,
+        action: "SCREENSHOT",
+        name,
+        status: "SUCCESS",
+        output: meta as Record<string, unknown> | undefined,
+        screenshotId,
+      });
+    },
+
     async onStepComplete(event) {
       let screenshotId: Types.ObjectId | undefined;
       if (event.screenshotBuffer) {
-        const storage = getStorageProvider();
-        const stored = await storage.upload({
-          buffer: event.screenshotBuffer,
-          fileName: `${event.stepId}.png`,
-          mimeType: "image/png",
-          folder: `tasks/${taskId}/screenshots`,
-        });
-        const fileDoc = await FileModel.create({
-          name: `${event.nodeName} screenshot`,
-          mimeType: "image/png",
-          size: stored.size,
-          provider: stored.provider,
-          url: stored.url,
-          storageKey: stored.storageKey,
-          kind: "screenshot",
-          taskId,
-        });
-        screenshotId = fileDoc._id as Types.ObjectId;
+        screenshotId = await storeScreenshot(taskId, event.stepId, event.screenshotBuffer, `${event.nodeName} screenshot`);
       }
 
       await ExecutionStep.create({
@@ -82,6 +83,11 @@ export function buildEngineHooks(params: {
     },
 
     async deliverWebhook(url, payload) {
+      if (WORKER_TARGET === "local") {
+        await postWebhook(url, payload);
+        return;
+      }
+      const { enqueueWebhook } = await import("@bos/queue");
       await enqueueWebhook({ webhookUrl: url, payload });
     },
 
@@ -94,6 +100,32 @@ export function buildEngineHooks(params: {
       return current?.status === "CANCELLED";
     },
   };
+}
+
+async function storeScreenshot(
+  taskId: string,
+  fileStem: string,
+  buffer: Buffer,
+  displayName: string
+): Promise<Types.ObjectId> {
+  const storage = getStorageProvider();
+  const stored = await storage.upload({
+    buffer,
+    fileName: `${fileStem}-${Date.now()}.png`,
+    mimeType: "image/png",
+    folder: `tasks/${taskId}/screenshots`,
+  });
+  const fileDoc = await FileModel.create({
+    name: displayName,
+    mimeType: "image/png",
+    size: stored.size,
+    provider: stored.provider,
+    url: stored.url,
+    storageKey: stored.storageKey,
+    kind: "screenshot",
+    taskId,
+  });
+  return fileDoc._id as Types.ObjectId;
 }
 
 function normalizeOutput(output: unknown): Record<string, unknown> | undefined {

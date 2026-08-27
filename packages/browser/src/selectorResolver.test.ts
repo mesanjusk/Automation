@@ -2,25 +2,31 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveTarget } from "./selectorResolver";
 import type { Page } from "playwright";
 
-function fakeLocator(succeeds: boolean) {
+function fakeLocator(succeeds: boolean, extra: Record<string, unknown> = {}) {
   const locator: any = {
     first: () => locator,
     nth: () => locator,
+    filter: () => locator,
+    count: async () => 1,
+    isVisible: async () => true,
+    isEditable: async () => true,
     waitFor: vi.fn(async () => {
       if (!succeeds) throw new Error("Timed out waiting for element");
     }),
+    ...extra,
   };
   return locator;
 }
 
 /** Builds a fake Playwright Page where each strategy either resolves or times out per `succeedsAt`. */
-function fakePage(succeedsAt: Set<string>): Page {
+function fakePage(succeedsAt: Set<string>, overrides: Record<string, unknown> = {}): Page {
   return {
     getByTestId: () => fakeLocator(succeedsAt.has("css-testid")),
     locator: () => fakeLocator(succeedsAt.has("css")),
     getByRole: () => fakeLocator(succeedsAt.has("role")),
     getByText: () => fakeLocator(succeedsAt.has("text")),
     getByLabel: () => fakeLocator(succeedsAt.has("aria-label")),
+    ...overrides,
   } as unknown as Page;
 }
 
@@ -70,5 +76,68 @@ describe("resolveTarget self-healing fallback", () => {
     await expect(resolveTarget(page, { css: ".x", text: "y" }, { timeout: 10 })).rejects.toThrow(
       /Could not resolve element target/
     );
+  });
+});
+
+describe("resolveTarget element eligibility", () => {
+  it("restricts matches to visible elements by default", async () => {
+    const filter = vi.fn(() => fakeLocator(true));
+    const page = fakePage(new Set(["css"]), {
+      locator: () => fakeLocator(true, { filter }),
+    });
+    await resolveTarget(page, { css: "textarea, [contenteditable='true']" }, { timeout: 10 });
+    expect(filter).toHaveBeenCalledWith({ visible: true });
+  });
+
+  it("does not filter by visibility when the target opts out", async () => {
+    const filter = vi.fn(() => fakeLocator(true));
+    const page = fakePage(new Set(["css"]), {
+      locator: () => fakeLocator(true, { filter }),
+    });
+    await resolveTarget(page, { css: "textarea", visibleOnly: false }, { timeout: 10 });
+    expect(filter).not.toHaveBeenCalled();
+  });
+
+  it("skips past visible-but-read-only matches when an editable target is required", async () => {
+    // Two matches: the first is a read-only display node, the second the composer.
+    const editability = [false, true];
+    const candidate = fakeLocator(true, {
+      count: async () => 2,
+      isEditable: vi.fn(async () => true),
+    });
+    const parent: any = fakeLocator(true, {
+      count: async () => 2,
+      nth: (i: number) => fakeLocator(true, { isEditable: async () => editability[i] === true }),
+    });
+    parent.filter = () => parent;
+    parent.first = () => candidate;
+    const page = fakePage(new Set(["css"]), { locator: () => parent });
+
+    const { strategy } = await resolveTarget(page, { css: "[contenteditable='true']", editable: true }, { timeout: 50 });
+    expect(strategy).toBe("css");
+  });
+
+  it("ignores a css selector that interpolated to an empty string", async () => {
+    const locator = vi.fn(() => fakeLocator(false));
+    const page = fakePage(new Set(["role"]), { locator });
+    const { strategy } = await resolveTarget(page, { css: "   ", role: "textbox" }, { timeout: 20 });
+    expect(strategy).toBe("role");
+    expect(locator).not.toHaveBeenCalled();
+  });
+
+  it("tries semantic strategies first when preferSemantic is set", async () => {
+    const order: string[] = [];
+    const page = fakePage(new Set(["role"]), {
+      locator: () => {
+        order.push("css");
+        return fakeLocator(false);
+      },
+      getByRole: () => {
+        order.push("role");
+        return fakeLocator(true);
+      },
+    });
+    await resolveTarget(page, { css: ".x", role: "button", preferSemantic: true }, { timeout: 20 });
+    expect(order[0]).toBe("role");
   });
 });

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { dbConnect } from "@/lib/db";
 import { Task, HumanIntervention } from "@bos/database";
-import { enqueueAutomationTask } from "@bos/queue";
+import { dispatchTask } from "@/lib/dispatch";
 
 export async function cancelTask(taskId: string) {
   await dbConnect();
@@ -17,7 +17,7 @@ export async function resumeTask(taskId: string) {
   const task = await Task.findById(taskId);
   if (!task) throw new Error("Task not found");
   if (task.status !== "WAITING_FOR_HUMAN") throw new Error("Task is not waiting for human input");
-  await enqueueAutomationTask(taskId, { priority: 1 });
+  await dispatchTask(taskId, { priority: 1 });
   revalidatePath(`/tasks/${taskId}`);
 }
 
@@ -36,7 +36,7 @@ export async function retryTask(taskId: string) {
     source: original.source,
     retryCount: (original.retryCount ?? 0) + 1,
   });
-  await enqueueAutomationTask(String(retryTask._id));
+  await dispatchTask(String(retryTask._id));
   revalidatePath("/tasks");
   return String(retryTask._id);
 }
@@ -51,6 +51,6 @@ export async function resolveHumanIntervention(interventionId: string, decision:
 
   // Re-queue the task so the engine re-enters the HUMAN_APPROVAL node, sees
   // the now-resolved decision, and continues (or branches on rejection).
-  await enqueueAutomationTask(String(intervention.taskId), { priority: 1 });
+  await dispatchTask(String(intervention.taskId), { priority: 1 });
   revalidatePath(`/tasks/${intervention.taskId}`);
 }

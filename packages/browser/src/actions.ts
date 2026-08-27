@@ -2,6 +2,9 @@ import path from "node:path";
 import type { NodeType, SelectorStrategy, WorkflowNode } from "@bos/shared";
 import type { BrowserSession } from "./session";
 import { resolveTarget, type VisualFallback } from "./selectorResolver";
+import { probePage, summariseProbe } from "./pageProbe";
+import { classifyFlowState, toFlowStates } from "./flowState";
+import { navigateFlow, waitForFlowState, type EmitScreenshot } from "./flowNavigator";
 import { interpolate, interpolateTarget, interpolateWithSecrets } from "./interpolate";
 
 export interface BrowserActionContext {
@@ -10,6 +13,13 @@ export interface BrowserActionContext {
   visualFallback?: VisualFallback;
   /** Resolves {{secret:name}} tokens (credentials) just-in-time; never persisted to variables/logs. */
   resolveSecret?: (name: string) => Promise<string | undefined>;
+  /**
+   * Persists an extra, named screenshot mid-step. Long-running nodes (the Flow
+   * navigator, state waits) capture several transitions each, including on the
+   * failure path where the step's own screenshot would never be returned.
+   */
+  emitScreenshot?: EmitScreenshot;
+  log?: (message: string) => void;
 }
 
 export interface BrowserActionResult {
@@ -46,6 +56,9 @@ export const BROWSER_NODE_TYPES: NodeType[] = [
   "GO_FORWARD",
   "SCROLL",
   "EXECUTE_JS",
+  "PROBE_PAGE",
+  "WAIT_FOR_STATE",
+  "FLOW_NAVIGATE",
 ];
 
 export async function executeBrowserAction(
@@ -195,6 +208,78 @@ export async function executeBrowserAction(
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       else await page.mouse.wheel(0, direction === "up" ? -600 : 600);
       return {};
+    }
+
+    case "PROBE_PAGE": {
+      // Inspect what is really on the page: roles, accessible names, aria
+      // labels and generated selectors, plus the Flow state they imply.
+      const report = await probePage(page, { maxElements: cfg.maxElements ?? 120 });
+      const classification = classifyFlowState(report);
+      ctx.log?.(`Probed ${report.url} -> ${classification.state}: ${classification.reason}`);
+      const buffer = cfg.screenshot === false ? undefined : await page.screenshot({ fullPage: false });
+      return {
+        output: {
+          state: classification.state,
+          reason: classification.reason,
+          url: report.url,
+          title: report.title,
+          composer: classification.composer ?? null,
+          submit: classification.submit ?? null,
+          primaryAction: classification.primaryAction ?? null,
+          errorText: classification.errorText ?? null,
+          discovered: summariseProbe(report, 25),
+          elements: report.elements.slice(0, 40),
+        },
+        screenshotBuffer: buffer,
+      };
+    }
+
+    case "WAIT_FOR_STATE": {
+      // Bounded polling on the real page state — never a fixed sleep.
+      const observation = await waitForFlowState(page, {
+        states: toFlowStates(cfg.states, ["GENERATION_UI"]),
+        failStates: toFlowStates(cfg.failStates),
+        timeoutMs: node.timeout || 120_000,
+        pollMs: cfg.pollMs,
+        requireNewVideo: cfg.requireNewVideo === true,
+        stepId: node.id,
+        screenshotName: cfg.screenshotName,
+        emitScreenshot: ctx.emitScreenshot,
+        log: ctx.log,
+      });
+      return {
+        output: {
+          state: observation.classification.state,
+          reason: observation.classification.reason,
+          url: observation.report.url,
+          composer: observation.classification.composer ?? null,
+          submit: observation.classification.submit ?? null,
+        },
+      };
+    }
+
+    case "FLOW_NAVIGATE": {
+      const { observation, history } = await navigateFlow(session, {
+        goal: toFlowStates(cfg.goalState ? [cfg.goalState] : undefined, ["GENERATION_UI"])[0],
+        maxSteps: cfg.maxSteps,
+        timeoutMs: node.timeout || 180_000,
+        pollMs: cfg.pollMs,
+        stepId: node.id,
+        emitScreenshot: ctx.emitScreenshot,
+        log: ctx.log,
+      });
+      return {
+        output: {
+          state: observation.classification.state,
+          reason: observation.classification.reason,
+          url: observation.report.url,
+          title: observation.report.title,
+          history,
+          composer: observation.classification.composer ?? null,
+          submit: observation.classification.submit ?? null,
+          discovered: summariseProbe(observation.report, 25),
+        },
+      };
     }
 
     case "EXECUTE_JS": {

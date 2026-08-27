@@ -1,6 +1,7 @@
 import type { ConditionExpression } from "@bos/shared";
 
-function resolveVar(path: string, variables: Record<string, unknown>): unknown {
+/** Reads a dotted path ("plan.result.shots") out of the variable bag. */
+export function resolveVariablePath(path: string, variables: Record<string, unknown>): unknown {
   return path.split(".").reduce<unknown>((acc, key) => {
     if (acc && typeof acc === "object" && key in (acc as Record<string, unknown>)) {
       return (acc as Record<string, unknown>)[key];
@@ -10,7 +11,7 @@ function resolveVar(path: string, variables: Record<string, unknown>): unknown {
 }
 
 export function evaluateCondition(expr: ConditionExpression, variables: Record<string, unknown>): boolean {
-  const left = resolveVar(expr.left, variables);
+  const left = resolveVariablePath(expr.left, variables);
   const right = expr.right;
 
   switch (expr.operator) {

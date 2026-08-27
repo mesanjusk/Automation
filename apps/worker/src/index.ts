@@ -1,7 +1,7 @@
 import "dotenv/config";
-import { Worker } from "bullmq";
+import type { Worker } from "bullmq";
 import { connectToDatabase, Task } from "@bos/database";
-import { getRedisConnection, type AutomationTaskJobData, type WebhookJobData } from "@bos/queue";
+import type { AutomationTaskJobData, WebhookJobData } from "@bos/queue";
 import { QUEUE_NAMES } from "@bos/shared";
 import { processTaskJob } from "./processor";
 import { deliverWebhook } from "./webhookDelivery";
@@ -41,7 +41,7 @@ async function startLocalMongoDispatcher() {
 async function main() {
   await connectToDatabase();
   console.log(`[worker ${WORKER_ID}] connected to MongoDB`);
-  const httpServer = startHealthServer(Number(process.env.PORT ?? process.env.WORKER_PORT ?? 4000), WORKER_ID);
+  const httpServer = startHealthServer(Number(process.env.PORT ?? process.env.WORKER_PORT ?? 4000), WORKER_ID, WORKER_TARGET);
 
   let taskWorker: Worker<AutomationTaskJobData> | undefined;
   let webhookWorker: Worker<WebhookJobData> | undefined;
@@ -52,9 +52,13 @@ async function main() {
     localPollTimer = await startLocalMongoDispatcher();
     console.log(`[worker ${WORKER_ID}] polling MongoDB for local tasks every ${LOCAL_POLL_MS}ms (Redis not required)`);
   } else {
+    // bullmq / ioredis are pulled in only here: a WORKER_TARGET=local machine
+    // never needs Redis installed, reachable, or even configured.
+    const { Worker: BullWorker } = await import("bullmq");
+    const { getRedisConnection } = await import("@bos/queue");
     const connection = getRedisConnection();
-    taskWorker = new Worker<AutomationTaskJobData>(QUEUE_NAMES.automationTasks, async (job) => { await processTaskJob(job.data.taskId); }, { connection, concurrency: CONCURRENCY });
-    webhookWorker = new Worker<WebhookJobData>(QUEUE_NAMES.webhooks, async (job) => { await deliverWebhook(job.data.webhookUrl, job.data.payload, job.data.secret); }, { connection, concurrency: 5 });
+    taskWorker = new BullWorker<AutomationTaskJobData>(QUEUE_NAMES.automationTasks, async (job) => { await processTaskJob(job.data.taskId); }, { connection, concurrency: CONCURRENCY });
+    webhookWorker = new BullWorker<WebhookJobData>(QUEUE_NAMES.webhooks, async (job) => { await deliverWebhook(job.data.webhookUrl, job.data.payload, job.data.secret); }, { connection, concurrency: 5 });
     taskWorker.on("failed", (job, err) => console.error(`[worker] ${QUEUE_NAMES.automationTasks} job ${job?.id} failed:`, err));
     webhookWorker.on("failed", (job, err) => console.error(`[worker] webhook job ${job?.id} failed:`, err.message));
     schedulerTimer = startScheduler();

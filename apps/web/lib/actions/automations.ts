@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { dbConnect } from "@/lib/db";
 import { Automation, Task, Workflow, WorkflowVersion } from "@bos/database";
-import { enqueueAutomationTask } from "@bos/queue";
+import { dispatchTask } from "@/lib/dispatch";
 
 export async function createAutomation(formData: FormData) {
   await dbConnect();
@@ -90,7 +90,7 @@ export async function runAutomationNow(automationId: string, input: Record<strin
     source: "dashboard",
   });
 
-  await enqueueAutomationTask(String(task._id));
+  await dispatchTask(String(task._id));
   revalidatePath(`/automations/${automationId}`);
   revalidatePath("/tasks");
   return String(task._id);

@@ -21,6 +21,7 @@ export async function processTaskJob(taskId: string): Promise<void> {
   const isResume = task.status === "WAITING_FOR_HUMAN" && !!task.currentStepId;
   const startNodeId = isResume ? (task.currentStepId as string) : definition.startNodeId;
   const taskInput = (task.input || {}) as Record<string, unknown>;
+  const browserAgentMode = taskInput.browserAgentMode === "chatgpt-web" ? "chatgpt-web" as const : undefined;
   const initialVariables = isResume ? (task.variables as Record<string, unknown>) : { input: taskInput, ...taskInput };
   const profile = task.browserProfileId ? await BrowserProfile.findById(task.browserProfileId).select("+encryptedStorageState") : null;
   task.status = isResume ? "RUNNING" : "STARTING"; task.workerId = WORKER_ID; if (!task.startedAt) task.startedAt = new Date(); await task.save();
@@ -31,8 +32,23 @@ export async function processTaskJob(taskId: string): Promise<void> {
     const storageState = profile?.encryptedStorageState ? decryptJSON(profile.encryptedStorageState) : undefined;
     session = await BrowserSession.launch({ userAgent: profile?.userAgent, viewport: profile?.viewport, locale: profile?.locale, timezone: profile?.timezone, storageState });
     task.status = "RUNNING"; await task.save();
-    const hooks = buildEngineHooks({ taskId: String(task._id), executionId: execution._id, session });
-    const engine = new WorkflowEngine({ definition, session, downloadDir, hooks, options: { visualFallback: buildVisualFallback(), resolveSecret: async (name: string) => { const credential = await Credential.findOne({ name, status: "active" }).select("+encryptedValue"); return credential?.encryptedValue ? decrypt(credential.encryptedValue) : undefined; } } });
+    const hooks = buildEngineHooks({ taskId: String(task._id), executionId: execution._id, session, browserAgentMode });
+    const engine = new WorkflowEngine({
+      definition,
+      session,
+      downloadDir,
+      hooks,
+      options: {
+        // Video Studio's adaptive agent reasons through the logged-in ChatGPT
+        // website. Do not silently fall back to a paid Gemini vision/API call.
+        visualFallback: browserAgentMode === "chatgpt-web" ? undefined : buildVisualFallback(),
+        maxAiActions: browserAgentMode === "chatgpt-web" ? Number(process.env.BROWSER_AGENT_MAX_ACTIONS || 150) : undefined,
+        resolveSecret: async (name: string) => {
+          const credential = await Credential.findOne({ name, status: "active" }).select("+encryptedValue");
+          return credential?.encryptedValue ? decrypt(credential.encryptedValue) : undefined;
+        },
+      },
+    });
     const result = await engine.run(startNodeId, initialVariables);
     task.variables = result.variables;
     if (result.status === "completed") { task.status = "COMPLETED"; task.completedAt = new Date(); task.output = result.variables; }

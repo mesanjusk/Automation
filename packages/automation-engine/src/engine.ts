@@ -260,7 +260,39 @@ export class WorkflowEngine {
         throw new Error("AI_DECISION node used but no decideNextAiAction hook was provided");
       }
 
-      const action = await this.ctx.hooks.decideNextAiAction(goal, state.variables, state.aiPreviousActions);
+      let action: AgentAction;
+      try {
+        action = await this.ctx.hooks.decideNextAiAction(goal, state.variables, state.aiPreviousActions);
+      } catch (err) {
+        // Getting a decision can fail for reasons that have nothing to do with
+        // the mission — the model's tab closed, it replied with prose. That is
+        // worth one observation, not the whole run, so it draws on the same
+        // budget a failed browser action does and the loop re-observes.
+        // Without this the raw error escapes unclassified and the engine files
+        // it as PERMANENT, ending a long video mission on a single hiccup.
+        consecutiveActionFailures += 1;
+        const message = (err as Error).message;
+        state.variables.browserAgentLastError = `Could not obtain the next decision: ${message}`;
+        this.ctx.hooks.log?.(`Adaptive browser decision failed (${consecutiveActionFailures}/5): ${message}. Re-observing.`);
+        await this.ctx.hooks.onStepComplete({
+          stepId: `${node.id}:decision:${state.aiActionsSoFar + consecutiveActionFailures}`,
+          nodeType: node.type,
+          nodeName: `${node.name} — decision`,
+          status: "FAILED",
+          duration: 0,
+          error: { message, category: "TRANSIENT", retryable: true },
+        });
+        if (consecutiveActionFailures >= 5) {
+          throw new AutomationError({
+            errorCode: "BROWSER_AGENT_BRAIN_UNAVAILABLE",
+            message: `Adaptive browser agent could not get a decision after ${consecutiveActionFailures} attempts. Last error: ${message}`,
+            category: "TRANSIENT",
+            retryable: true,
+            stepId: node.id,
+          });
+        }
+        continue;
+      }
       state.aiActionsSoFar += 1;
       state.aiPreviousActions.push(action);
 

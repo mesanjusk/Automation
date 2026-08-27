@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { AIRequest } from "@bos/database";
-import { agentActionSchema, type AgentAction } from "@bos/shared";
+import { agentActionSchema, type AgentAction, type SelectorTarget } from "@bos/shared";
 import { probePage, type BrowserSession, type PageProbeReport, type ProbedElement } from "@bos/browser";
 
 const CHATGPT_COMPOSER = "#prompt-textarea:visible, textarea:visible, div[contenteditable='true'][role='textbox']:visible, div[contenteditable='true'][data-lexical-editor='true']:visible";
@@ -108,7 +108,40 @@ async function waitForComposer(page: Page): Promise<void> {
   await page.locator(CHATGPT_COMPOSER).first().waitFor({ state: "visible", timeout: 35_000 });
 }
 
+/**
+ * The brain tab went away mid-question — the site closed it, the renderer
+ * crashed, a tab-management action took it. Kept distinct from a genuine
+ * ChatGPT failure because the cure is different: reopen it and ask again.
+ */
+class BrainTabClosed extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BrainTabClosed";
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isClosedPageError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /has been closed|target closed|page closed|browser closed|target crashed/i.test(message);
+}
+
 async function askChatGpt(page: Page, prompt: string): Promise<string> {
+  try {
+    return await converseWithChatGpt(page, prompt);
+  } catch (err) {
+    if (err instanceof BrainTabClosed) throw err;
+    if (isClosedPageError(err)) {
+      throw new BrainTabClosed(`The ChatGPT brain tab closed while it was answering: ${(err as Error).message}`);
+    }
+    throw err;
+  }
+}
+
+async function converseWithChatGpt(page: Page, prompt: string): Promise<string> {
   await waitForComposer(page);
   const composer = page.locator(CHATGPT_COMPOSER).first();
   const assistant = page.locator('[data-message-author-role="assistant"]');
@@ -120,6 +153,7 @@ async function askChatGpt(page: Page, prompt: string): Promise<string> {
   let last = "";
   let stable = 0;
   while (Date.now() < deadline) {
+    if (page.isClosed()) throw new BrainTabClosed("The ChatGPT brain tab closed while it was answering.");
     const count = await assistant.count();
     if (count > before) {
       const text = ((await assistant.nth(count - 1).innerText().catch(() => "")) || "").trim();
@@ -128,7 +162,11 @@ async function askChatGpt(page: Page, prompt: string): Promise<string> {
       last = text || last;
       if (stable >= 2) return last;
     }
-    await page.waitForTimeout(1200);
+    // A page-owned wait dies with the page, reporting itself as a bare
+    // "page.waitForTimeout: Target page ... has been closed". A plain timer
+    // outlives the tab, so the loop reaches the isClosed() check above and
+    // names what actually happened.
+    await sleep(1200);
   }
   if (last) return last;
   throw new Error("ChatGPT browser brain did not return a response within 180 seconds.");
@@ -144,19 +182,79 @@ function parseDecision(raw: string): BrainDecision {
   return parsed;
 }
 
-function targetFor(decision: BrainDecision, rows: Array<{ id: string; el: ProbedElement }>): AgentAction["target"] | undefined {
+/** Roles with no matching power — every plain div on the page is "generic". */
+const UNSELECTABLE_ROLES = new Set(["", "generic", "none", "presentation"]);
+
+function handleFor(el: ProbedElement): { role?: string; name: string } {
+  return {
+    role: UNSELECTABLE_ROLES.has(el.role) ? undefined : el.role,
+    name: (el.name || el.text || "").trim(),
+  };
+}
+
+/**
+ * Describes a probed element the way a person would find it again.
+ *
+ * `cssPath` is a positional fallback: up to twelve levels of
+ * `div:nth-child(n)` generated from wherever the element sat at probe time.
+ * Flow re-renders between the observation and the click, so that path
+ * routinely points at nothing a second later — which is how a click on a
+ * listed, visible button still fails to resolve. The element's role and
+ * accessible name survive those re-renders, so they lead and the path only
+ * backs them up.
+ */
+export function targetForElement(el: ProbedElement, all: ProbedElement[]): SelectorTarget {
+  const { role, name } = handleFor(el);
+  const target: SelectorTarget = { preferSemantic: true };
+  if (role) target.role = role;
+  if (name) target.text = name;
+  if (el.ariaLabel) target.ariaLabel = el.ariaLabel;
+  if (el.editable) target.editable = true;
+
+  const twins =
+    role || name
+      ? all.filter((candidate) => {
+          const other = handleFor(candidate);
+          return other.role === role && other.name === name;
+        })
+      : [];
+
+  if (twins.length > 1) {
+    // Flow renders one identical control per clip card, so the name alone is
+    // not a handle. `nth` indexes into a strategy's match set — the probe walks
+    // visible elements in DOM order, the same order Playwright indexes — so it
+    // only means something for strategies that match many elements. A unique
+    // cssPath asked for nth(3) resolves to nothing, so it is left off here.
+    target.nth = twins.indexOf(el);
+    return target;
+  }
+
+  if (el.testId) target.testId = el.testId;
+  target.css = el.cssPath;
+  return target;
+}
+
+function targetFor(
+  decision: BrainDecision,
+  rows: Array<{ id: string; el: ProbedElement }>,
+  all: ProbedElement[]
+): AgentAction["target"] | undefined {
   if (decision.elementId) {
     const row = rows.find((candidate) => candidate.id === decision.elementId);
     if (!row) throw new Error(`Browser brain selected stale/unknown element ${decision.elementId}`);
-    return { css: row.el.cssPath };
+    return targetForElement(row.el, all);
   }
-  if (decision.targetText) return { text: decision.targetText };
+  if (decision.targetText) return { text: decision.targetText, preferSemantic: true };
   return undefined;
 }
 
-function toAgentAction(decision: BrainDecision, rows: Array<{ id: string; el: ProbedElement }>): AgentAction {
+function toAgentAction(
+  decision: BrainDecision,
+  rows: Array<{ id: string; el: ProbedElement }>,
+  all: ProbedElement[]
+): AgentAction {
   const reason = String(decision.reason || `ChatGPT browser brain chose ${decision.action}`);
-  const target = targetFor(decision, rows);
+  const target = targetFor(decision, rows, all);
   let action: AgentAction;
   switch (decision.action) {
     case "click": action = { tool: "browser_click", target, reason }; break;
@@ -180,6 +278,12 @@ export function buildChatGptWebDecisionHook(taskId: string, session: BrowserSess
   let brainPage: Page | null = null;
   let observationNumber = 0;
   let brainInitialized = false;
+
+  function focusTab(page: Page, label: string): void {
+    const index = session.tabs.indexOf(page);
+    if (index < 0) throw new Error(`${label} tab disappeared.`);
+    session.switchTab(index);
+  }
 
   async function ensureBrainTab(returnTo: Page): Promise<Page> {
     if (brainPage && !brainPage.isClosed()) return brainPage;
@@ -214,24 +318,43 @@ export function buildChatGptWebDecisionHook(taskId: string, session: BrowserSess
       });
     }
 
-    const chat = await ensureBrainTab(flowPage);
-    const brainIndex = session.tabs.indexOf(chat);
-    if (brainIndex < 0) throw new Error("ChatGPT browser brain tab disappeared.");
-    session.switchTab(brainIndex);
-    const prompt = protocolPrompt(goal, variables, previousActions, report, rows, !brainInitialized);
+    let chat = await ensureBrainTab(flowPage);
+    focusTab(chat, "ChatGPT browser brain");
     const started = Date.now();
     try {
-      let raw = await askChatGpt(chat, prompt);
+      // A reopened tab is a brand-new conversation holding none of the prior
+      // turns, so every retry restates the mission.
+      const prompt = protocolPrompt(goal, variables, previousActions, report, rows, !brainInitialized);
+      const restated = protocolPrompt(goal, variables, previousActions, report, rows, true);
+
+      // Reopening the brain tab costs one round trip. Letting the closure
+      // escape costs the whole mission: a raw Playwright error out of this
+      // hook is unclassified, and the engine files unclassified decision
+      // failures as PERMANENT.
+      const ask = async (text: string): Promise<string> => {
+        try {
+          return await askChatGpt(chat, text);
+        } catch (err) {
+          if (!(err instanceof BrainTabClosed)) throw err;
+          options.log?.(`${err.message} Reopening ChatGPT and restating the mission.`);
+          brainPage = null;
+          chat = await ensureBrainTab(flowPage);
+          focusTab(chat, "ChatGPT browser brain");
+          return askChatGpt(chat, restated);
+        }
+      };
+
+      let raw = await ask(prompt);
       let decision: BrainDecision;
       try {
         decision = parseDecision(raw);
       } catch (firstParseError) {
         options.log?.(`Browser brain returned invalid JSON; requesting one correction: ${(firstParseError as Error).message}`);
-        raw = await askChatGpt(chat, "Your previous reply was not valid strict JSON for the browser-action protocol. Return ONLY one valid JSON action now, with no markdown or explanation.");
+        raw = await ask("Your previous reply was not valid strict JSON for the browser-action protocol. Return ONLY one valid JSON action now, with no markdown or explanation.");
         decision = parseDecision(raw);
       }
       brainInitialized = true;
-      const action = toAgentAction(decision, rows);
+      const action = toAgentAction(decision, rows, report.elements);
       await AIRequest.create({
         taskId,
         provider: "chatgpt-web",

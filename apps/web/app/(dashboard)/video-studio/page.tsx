@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { BrowserProfile } from "@bos/database";
 import { runIdeaToFlowVideo } from "@/lib/actions/videoStudio";
 import { Button, Card, CardContent, Label, Select, Textarea, Badge } from "@/components/ui/primitives";
-import { Video, WandSparkles } from "lucide-react";
+import { Video, Sparkles } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -65,7 +65,7 @@ export default async function VideoStudioPage() {
             </div>
 
             <Button type="submit" size="lg" disabled={!ready.length} className="w-full">
-              <WandSparkles className="h-4 w-4" /> Create video from idea
+              <Sparkles className="h-4 w-4" /> Create video from idea
             </Button>
           </form>
         </CardContent>

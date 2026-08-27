@@ -1,7 +1,7 @@
 # The browser worker: long-running Node process + real Chromium. This is
 # what you deploy to Render (or any always-on container host) — never to
 # Vercel serverless functions.
-FROM mcr.microsoft.com/playwright:v1.48.2-jammy AS base
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy AS base
 WORKDIR /repo
 
 COPY package.json package-lock.json* ./

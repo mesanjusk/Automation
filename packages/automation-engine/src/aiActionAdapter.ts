@@ -28,6 +28,7 @@ export function agentActionToWorkflowNode(action: AgentAction, stepId: string): 
   if (!type) {
     throw new Error(`AI tool "${action.tool}" is not a browser action and cannot be executed directly`);
   }
+  const waitMs = action.tool === "browser_wait" ? Number(action.value || 1000) : undefined;
   return {
     id: stepId,
     type,
@@ -40,8 +41,9 @@ export function agentActionToWorkflowNode(action: AgentAction, stepId: string): 
       tabIndex: action.value ? Number(action.value) : undefined,
       scrollDirection: (action.value as "up" | "down" | "top" | "bottom" | undefined) ?? "down",
       filePath: action.value,
+      ms: Number.isFinite(waitMs) ? waitMs : undefined,
     },
-    timeout: 15_000,
+    timeout: action.tool === "browser_wait" ? Math.max(15_000, (Number.isFinite(waitMs) ? waitMs! : 1000) + 5000) : 15_000,
     retry: { maxRetries: 0, delayMs: 1000, exponentialBackoff: true, maxDelayMs: 30_000 },
     continueOnError: false,
   };

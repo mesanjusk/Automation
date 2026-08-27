@@ -18,11 +18,13 @@ import {
   Code2,
   Settings,
   Bot,
+  Video,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/video-studio", label: "Video Studio", icon: Video },
   { href: "/automations", label: "Automations", icon: ListChecks },
   { href: "/workflows", label: "Workflows", icon: Workflow },
   { href: "/tasks", label: "Tasks", icon: ClipboardList },

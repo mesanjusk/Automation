@@ -16,17 +16,33 @@ function extractJson(text: string): string {
   return (fenced?.[1] ?? text).trim();
 }
 
+/**
+ * Resolve model names from the current deployment convention first while
+ * preserving the older BOS variable names for backwards compatibility.
+ */
+export function getGeminiTextModelName(): string {
+  return process.env.GEMINI_TEXT_MODEL || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+}
+
+export function getGeminiVisionModelName(): string {
+  return process.env.GEMINI_IMAGE_MODEL || process.env.GEMINI_VISION_MODEL || getGeminiTextModelName();
+}
+
 export class GeminiProvider implements LLMProvider {
   readonly name = "gemini";
   private client: GoogleGenerativeAI;
   private modelName: string;
   private visionModelName: string;
 
-  constructor(apiKey = process.env.GEMINI_API_KEY, modelName = process.env.GEMINI_MODEL, visionModelName = process.env.GEMINI_VISION_MODEL) {
+  constructor(
+    apiKey = process.env.GEMINI_API_KEY,
+    modelName = getGeminiTextModelName(),
+    visionModelName = getGeminiVisionModelName()
+  ) {
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
     this.client = new GoogleGenerativeAI(apiKey);
-    this.modelName = modelName || "gemini-2.0-flash";
-    this.visionModelName = visionModelName || this.modelName;
+    this.modelName = modelName;
+    this.visionModelName = visionModelName;
   }
 
   async decideNextAction(

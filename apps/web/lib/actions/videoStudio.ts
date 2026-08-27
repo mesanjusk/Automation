@@ -7,6 +7,7 @@ import { enqueueAutomationTask } from "@bos/queue";
 import type { WorkflowDefinition } from "@bos/shared";
 
 const RETRY = { maxRetries: 2, delayMs: 2000, exponentialBackoff: true, maxDelayMs: 15000 };
+const CHATGPT_COMPOSER = "#prompt-textarea, textarea, [contenteditable='true'][data-lexical-editor='true'], [contenteditable='true']";
 
 function buildWorkflow(): WorkflowDefinition {
   const masterPrompt = `You are the production brain for an automated social-video pipeline. The user gives ONLY an idea. Convert it into one complete Google Flow Agent production brief. Do not ask questions and do not explain your reasoning. Infer the best creative treatment from the idea.
@@ -40,9 +41,9 @@ Structure the brief with: Project goal, global continuity lock, then Shot 1, Sho
     edges: [],
     nodes: [
       { id: "open_chatgpt", type: "NAVIGATE", name: "Open ChatGPT", config: { url: "https://chatgpt.com/" }, next: "wait_chat_box", timeout: 45000, retry: RETRY, continueOnError: false },
-      { id: "wait_chat_box", type: "WAIT_FOR_SELECTOR", name: "Wait for ChatGPT input", config: { target: { css: "textarea" } }, next: "type_master_prompt", timeout: 45000, retry: RETRY, continueOnError: false },
-      { id: "type_master_prompt", type: "TYPE", name: "Send idea to production brain", config: { target: { css: "textarea", role: "textbox" }, value: masterPrompt }, next: "submit_chatgpt", timeout: 30000, retry: RETRY, continueOnError: false },
-      { id: "submit_chatgpt", type: "PRESS_KEY", name: "Submit idea", config: { target: { css: "textarea" }, key: "Enter" }, next: "collect_flow_brief", timeout: 30000, retry: RETRY, continueOnError: false },
+      { id: "wait_chat_box", type: "WAIT_FOR_SELECTOR", name: "Wait for ChatGPT input", config: { target: { css: CHATGPT_COMPOSER, role: "textbox" } }, next: "type_master_prompt", timeout: 30000, retry: RETRY, continueOnError: false },
+      { id: "type_master_prompt", type: "TYPE", name: "Send idea to production brain", config: { target: { css: CHATGPT_COMPOSER, role: "textbox" }, value: masterPrompt }, next: "submit_chatgpt", timeout: 30000, retry: RETRY, continueOnError: false },
+      { id: "submit_chatgpt", type: "PRESS_KEY", name: "Submit idea", config: { target: { css: CHATGPT_COMPOSER, role: "textbox" }, key: "Enter" }, next: "collect_flow_brief", timeout: 30000, retry: RETRY, continueOnError: false },
       { id: "collect_flow_brief", type: "EXECUTE_JS", name: "Collect Flow production brief", config: { script: waitForChatGpt, variableName: "flowBrief" }, next: "open_flow", timeout: 210000, retry: { ...RETRY, maxRetries: 0 }, continueOnError: false },
       { id: "open_flow", type: "NEW_TAB", name: "Open Google Flow", config: { url: "https://labs.google/fx/tools/flow" }, next: "wait_flow", timeout: 45000, retry: RETRY, continueOnError: false },
       { id: "wait_flow", type: "WAIT", name: "Let Flow load", config: { ms: 8000 }, next: "enable_agent", timeout: 15000, retry: RETRY, continueOnError: false },

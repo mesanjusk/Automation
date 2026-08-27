@@ -19,6 +19,7 @@ export function buildEngineHooks(params: {
   return {
     async onStepStart(event) {
       console.log(`[task ${taskId}] -> ${event.nodeType} (${event.nodeName})`);
+      await Task.findByIdAndUpdate(taskId, { currentStepId: event.stepId });
     },
 
     async onStepComplete(event) {

@@ -25,7 +25,6 @@ export interface ProbedElement {
   editable: boolean;
   inViewport: boolean;
   rect: { x: number; y: number; width: number; height: number };
-  /** Selector discovered from the live DOM; usable directly by Playwright. */
   cssPath: string;
   attrs: Record<string, string>;
 }
@@ -34,7 +33,6 @@ export interface PageProbeReport {
   url: string;
   title: string;
   readyState: string;
-  /** Trimmed innerText — the visible-text signal the classifier reasons over. */
   visibleText: string;
   elements: ProbedElement[];
   hiddenInteractiveCount: number;
@@ -45,7 +43,6 @@ export interface PageProbeReport {
 }
 
 export interface PageProbeOptions {
-  /** Cap on elements returned so execution-step documents stay small. */
   maxElements?: number;
   maxTextLength?: number;
 }
@@ -53,50 +50,30 @@ export interface PageProbeOptions {
 /**
  * Runs the probe inside the page and returns what is really on screen.
  *
- * The whole probe is one self-contained function because `page.evaluate`
- * serialises it — it cannot reference anything from this module's scope.
+ * tsx/esbuild can inject calls to a module-level `__name` helper into nested
+ * functions. Playwright serialises the callback passed to page.evaluate but
+ * not that helper, which caused `ReferenceError: __name is not defined` in
+ * the browser utility script. Seed a compatible helper in the page realm via
+ * a string expression before evaluating the probe callback.
  */
 export async function probePage(page: Page, opts: PageProbeOptions = {}): Promise<PageProbeReport> {
   const maxElements = opts.maxElements ?? 120;
   const maxTextLength = opts.maxTextLength ?? 6000;
 
+  await page.evaluate(`globalThis.__name = globalThis.__name || ((target, value) => {
+    try { Object.defineProperty(target, "name", { value, configurable: true }); } catch {}
+    return target;
+  })`);
+
   const report = await page.evaluate(
     ({ maxElements, maxTextLength }: { maxElements: number; maxTextLength: number }) => {
       const IMPLICIT_ROLES: Record<string, string> = {
-        a: "link",
-        button: "button",
-        textarea: "textbox",
-        select: "combobox",
-        summary: "button",
-        video: "video",
-        img: "img",
-        h1: "heading",
-        h2: "heading",
-        h3: "heading",
-        form: "form",
-        nav: "navigation",
-        dialog: "dialog",
+        a: "link", button: "button", textarea: "textbox", select: "combobox",
+        summary: "button", video: "video", img: "img", h1: "heading", h2: "heading",
+        h3: "heading", form: "form", nav: "navigation", dialog: "dialog",
       };
       const TEXT_INPUT_TYPES = new Set(["text", "search", "url", "email", "tel", "password", "number", ""]);
-      const STABLE_ATTRS = [
-        "data-testid",
-        "data-test-id",
-        "data-test",
-        "data-id",
-        "data-action",
-        "name",
-        "type",
-        "role",
-        "aria-label",
-        "aria-labelledby",
-        "aria-describedby",
-        "aria-disabled",
-        "aria-expanded",
-        "aria-haspopup",
-        "placeholder",
-        "contenteditable",
-        "title",
-      ];
+      const STABLE_ATTRS = ["data-testid","data-test-id","data-test","data-id","data-action","name","type","role","aria-label","aria-labelledby","aria-describedby","aria-disabled","aria-expanded","aria-haspopup","placeholder","contenteditable","title"];
 
       const clean = (value: string | null | undefined, cap: number): string =>
         (value ?? "").replace(/\s+/g, " ").trim().slice(0, cap);
@@ -107,10 +84,6 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
         if (Number(style.opacity) < 0.05) return false;
         const rect = el.getBoundingClientRect();
         if (rect.width < 2 || rect.height < 2) return false;
-        // The classic "screen-reader only" trick — position it at left:-9999px —
-        // leaves a real bounding box, so size alone does not catch it. Compare
-        // against the *document* origin rather than the viewport so an element
-        // merely scrolled out of view is still counted as visible.
         if (rect.right + window.scrollX <= 0 || rect.bottom + window.scrollY <= 0) return false;
         return true;
       };
@@ -137,10 +110,7 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
         if (label && label.trim()) return clean(label, 160);
         const labelledBy = el.getAttribute("aria-labelledby");
         if (labelledBy) {
-          const parts = labelledBy
-            .split(/\s+/)
-            .map((id) => document.getElementById(id)?.textContent ?? "")
-            .join(" ");
+          const parts = labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
           if (parts.trim()) return clean(parts, 160);
         }
         const id = el.getAttribute("id");
@@ -177,9 +147,7 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
 
       const cssPathFor = (el: Element): string => {
         const id = el.getAttribute("id");
-        if (id && /^[A-Za-z][\w-]*$/.test(id) && document.querySelectorAll(`#${CSS.escape(id)}`).length === 1) {
-          return `#${CSS.escape(id)}`;
-        }
+        if (id && /^[A-Za-z][\w-]*$/.test(id) && document.querySelectorAll(`#${CSS.escape(id)}`).length === 1) return `#${CSS.escape(id)}`;
         for (const attr of ["data-testid", "data-test-id", "data-test"]) {
           const value = el.getAttribute(attr);
           if (value) {
@@ -191,15 +159,9 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
         let node: Element | null = el;
         while (node && node.nodeType === 1 && parts.length < 12) {
           const tag = node.tagName.toLowerCase();
-          if (tag === "html" || tag === "body") {
-            parts.unshift(tag);
-            break;
-          }
+          if (tag === "html" || tag === "body") { parts.unshift(tag); break; }
           const parent: Element | null = node.parentElement;
-          if (!parent) {
-            parts.unshift(tag);
-            break;
-          }
+          if (!parent) { parts.unshift(tag); break; }
           const index = Array.prototype.indexOf.call(parent.children, node) + 1;
           parts.unshift(`${tag}:nth-child(${index})`);
           node = parent;
@@ -207,35 +169,15 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
         return parts.join(" > ");
       };
 
-      const selector = [
-        "a[href]",
-        "button",
-        "input",
-        "textarea",
-        "select",
-        "summary",
-        "video",
-        "[contenteditable='']",
-        "[contenteditable='true']",
-        "[role]",
-        "[aria-label]",
-        "[tabindex]:not([tabindex='-1'])",
-      ].join(",");
-
+      const selector = ["a[href]","button","input","textarea","select","summary","video","[contenteditable='']","[contenteditable='true']","[role]","[aria-label]","[tabindex]:not([tabindex='-1'])"].join(",");
       const all = Array.prototype.slice.call(document.querySelectorAll(selector)) as Element[];
       const viewportHeight = window.innerHeight || 0;
       const viewportWidth = window.innerWidth || 0;
-
-      // Type-only reference to the module-level interface: erased at compile
-      // time, so nothing from this module's scope leaks into the page.
       const visible: ProbedElement[] = [];
       let hiddenInteractiveCount = 0;
 
       for (const el of all) {
-        if (!isVisible(el)) {
-          hiddenInteractiveCount += 1;
-          continue;
-        }
+        if (!isVisible(el)) { hiddenInteractiveCount += 1; continue; }
         const rect = el.getBoundingClientRect();
         const attrs: Record<string, string> = {};
         for (const attr of STABLE_ATTRS) {
@@ -243,57 +185,27 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
           if (value !== null) attrs[attr] = clean(value, 120);
         }
         visible.push({
-          index: visible.length,
-          tag: el.tagName.toLowerCase(),
-          role: roleOf(el),
-          name: accessibleName(el),
-          ariaLabel: el.getAttribute("aria-label"),
-          placeholder: el.getAttribute("placeholder") || el.getAttribute("data-placeholder"),
-          text: clean((el as HTMLElement).innerText || el.textContent, 200),
-          testId: el.getAttribute("data-testid") || el.getAttribute("data-test-id"),
-          href: el.getAttribute("href"),
-          type: el.getAttribute("type"),
-          visible: true,
-          disabled: isDisabled(el),
-          editable: isEditable(el),
+          index: visible.length, tag: el.tagName.toLowerCase(), role: roleOf(el), name: accessibleName(el),
+          ariaLabel: el.getAttribute("aria-label"), placeholder: el.getAttribute("placeholder") || el.getAttribute("data-placeholder"),
+          text: clean((el as HTMLElement).innerText || el.textContent, 200), testId: el.getAttribute("data-testid") || el.getAttribute("data-test-id"),
+          href: el.getAttribute("href"), type: el.getAttribute("type"), visible: true, disabled: isDisabled(el), editable: isEditable(el),
           inViewport: rect.bottom > 0 && rect.top < viewportHeight && rect.right > 0 && rect.left < viewportWidth,
-          rect: {
-            x: Math.round(rect.left),
-            y: Math.round(rect.top),
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-          },
-          cssPath: cssPathFor(el),
-          attrs,
+          rect: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+          cssPath: cssPathFor(el), attrs,
         });
         if (visible.length >= maxElements) break;
       }
 
       const videos = Array.prototype.slice.call(document.querySelectorAll("video")) as HTMLVideoElement[];
-      const liveRegions = (Array.prototype.slice.call(
-        document.querySelectorAll("[aria-live], [role='status'], [role='alert']")
-      ) as Element[])
-        .map((el) => clean((el as HTMLElement).innerText || el.textContent, 200))
-        .filter((text) => text.length > 0)
-        .slice(0, 10);
+      const liveRegions = (Array.prototype.slice.call(document.querySelectorAll("[aria-live], [role='status'], [role='alert']")) as Element[])
+        .map((el) => clean((el as HTMLElement).innerText || el.textContent, 200)).filter((text) => text.length > 0).slice(0, 10);
 
       return {
-        url: location.href,
-        title: document.title,
-        readyState: document.readyState,
-        visibleText: clean(document.body?.innerText, maxTextLength),
-        elements: visible,
-        hiddenInteractiveCount,
-        frames: (Array.prototype.slice.call(document.querySelectorAll("iframe")) as HTMLIFrameElement[])
-          .map((frame) => frame.src || "(about:blank)")
-          .slice(0, 10),
-        media: {
-          videos: videos.length,
-          playableVideos: videos.filter((video) => (video.src || video.currentSrc || "").length > 0).length,
-          progressBars: document.querySelectorAll("[role='progressbar'], progress").length,
-        },
-        liveRegions,
-        probedAt: new Date().toISOString(),
+        url: location.href, title: document.title, readyState: document.readyState,
+        visibleText: clean(document.body?.innerText, maxTextLength), elements: visible, hiddenInteractiveCount,
+        frames: (Array.prototype.slice.call(document.querySelectorAll("iframe")) as HTMLIFrameElement[]).map((frame) => frame.src || "(about:blank)").slice(0, 10),
+        media: { videos: videos.length, playableVideos: videos.filter((video) => (video.src || video.currentSrc || "").length > 0).length, progressBars: document.querySelectorAll("[role='progressbar'], progress").length },
+        liveRegions, probedAt: new Date().toISOString(),
       };
     },
     { maxElements, maxTextLength }
@@ -302,10 +214,7 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
   return report as PageProbeReport;
 }
 
-/** Compact, log-friendly rendering of what the probe found. */
 export function summariseProbe(report: PageProbeReport, limit = 25): string {
-  const rows = report.elements
-    .slice(0, limit)
-    .map((el) => `- ${el.role} "${el.name || el.text}"${el.editable ? " [editable]" : ""}${el.disabled ? " [disabled]" : ""} => ${el.cssPath}`);
+  const rows = report.elements.slice(0, limit).map((el) => `- ${el.role} "${el.name || el.text}"${el.editable ? " [editable]" : ""}${el.disabled ? " [disabled]" : ""} => ${el.cssPath}`);
   return [`${report.url} — "${report.title}" (${report.elements.length} visible controls)`, ...rows].join("\n");
 }

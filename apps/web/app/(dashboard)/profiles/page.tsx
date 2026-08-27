@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { BrowserProfile } from "@bos/database";
 import { Card, CardContent, Button, Badge, EmptyState } from "@/components/ui/primitives";
 import { ProfileSessionControls } from "@/components/profile-session-controls";
+import { ProfileLoginCommand } from "@/components/profile-login-command";
 import { formatRelativeTime } from "@/lib/utils";
 import { Plus } from "lucide-react";
 
@@ -18,9 +19,7 @@ export default async function ProfilesPage() {
         <div>
           <h1 className="text-2xl font-semibold">Browser Profiles</h1>
           <p className="text-sm text-muted-foreground">
-            Persistent identities (cookies, locale, viewport) automations reuse across runs. To log in manually, use the{" "}
-            <code className="rounded bg-muted px-1 py-0.5">npm run login-helper -- --profile=&lt;id&gt;</code> CLI (see README) — it opens a real
-            headed browser on your machine and saves the session here when you close it.
+            Persistent identities that automations reuse across runs. Create a profile, use its setup command on your own computer, then save the browser session.
           </p>
         </div>
         <Link href="/profiles/new">
@@ -46,6 +45,7 @@ export default async function ProfilesPage() {
                 </div>
                 {p.description && <p className="text-sm text-muted-foreground">{p.description}</p>}
                 <p className="text-xs text-muted-foreground">Last used {formatRelativeTime(p.lastUsedAt)}</p>
+                <ProfileLoginCommand profileId={String(p._id)} />
                 <ProfileSessionControls profileId={String(p._id)} hasSession={!!p.encryptedStorageState} />
               </CardContent>
             </Card>

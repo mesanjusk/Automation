@@ -4,6 +4,7 @@ import { Execution, ExecutionStep, HumanIntervention, File as FileModel, Task } 
 import { getStorageProvider } from "@bos/storage";
 import type { AgentAction } from "@bos/shared";
 import { buildAiDecisionHook } from "./aiAgent";
+import { buildChatGptWebDecisionHook } from "./chatgptBrowserBrain";
 import { deliverWebhook as postWebhook } from "./webhookDelivery";
 
 const WORKER_TARGET = (process.env.WORKER_TARGET || "render").toLowerCase() === "local" ? "local" : "render";
@@ -14,9 +15,30 @@ export function buildEngineHooks(params: {
   executionId: Types.ObjectId;
   session: BrowserSession;
   allowedAiDomains?: string[];
+  browserAgentMode?: "chatgpt-web";
 }): EngineHooks {
   const { taskId, executionId, session } = params;
-  const decideNextAiAction = buildAiDecisionHook(taskId, session, params.allowedAiDomains);
+
+  const emitNamedScreenshot = async (name: string, buffer: Buffer, meta?: Record<string, unknown>) => {
+    const screenshotId = await storeScreenshot(taskId, name, buffer, name);
+    await ExecutionStep.create({
+      executionId,
+      taskId,
+      stepId: name,
+      action: "SCREENSHOT",
+      name,
+      status: "SUCCESS",
+      output: meta,
+      screenshotId,
+    });
+  };
+
+  const decideNextAiAction = params.browserAgentMode === "chatgpt-web"
+    ? buildChatGptWebDecisionHook(taskId, session, {
+        onObservation: emitNamedScreenshot,
+        log: (message) => console.log(`[task ${taskId}] ${message}`),
+      })
+    : buildAiDecisionHook(taskId, session, params.allowedAiDomains);
 
   return {
     async onStepStart(event) {
@@ -25,19 +47,7 @@ export function buildEngineHooks(params: {
     },
 
     async onScreenshot(name, buffer, meta) {
-      // Named mid-step transitions (flow_landing, flow_generating, ...) get
-      // their own dashboard row so a failed run can be read back visually.
-      const screenshotId = await storeScreenshot(taskId, name, buffer, name);
-      await ExecutionStep.create({
-        executionId,
-        taskId,
-        stepId: name,
-        action: "SCREENSHOT",
-        name,
-        status: "SUCCESS",
-        output: meta as Record<string, unknown> | undefined,
-        screenshotId,
-      });
+      await emitNamedScreenshot(name, buffer, meta);
     },
 
     async onStepComplete(event) {

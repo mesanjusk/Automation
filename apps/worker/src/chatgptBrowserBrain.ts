@@ -52,24 +52,29 @@ function observationText(report: PageProbeReport, rows: Array<{ id: string; el: 
   ].join("\n");
 }
 
-function protocolPrompt(goal: string, variables: Record<string, unknown>, previousActions: AgentAction[], report: PageProbeReport, rows: Array<{ id: string; el: ProbedElement }>): string {
+function protocolPrompt(
+  goal: string,
+  variables: Record<string, unknown>,
+  previousActions: AgentAction[],
+  report: PageProbeReport,
+  rows: Array<{ id: string; el: ProbedElement }>,
+  includeMission: boolean
+): string {
   const lastError = variables.browserAgentLastError ? String(variables.browserAgentLastError) : "none";
   const recent = previousActions.slice(-12).map((action, i) => `${i + 1}. ${action.tool} — ${action.reason}`).join("\n") || "none";
   return [
-    "You are the browser brain controlling an already-open Google Flow tab.",
-    "Your job is to complete the video mission through the visible Google Flow UI, one browser action at a time.",
-    "Do not merely give instructions. Choose the NEXT browser action.",
-    "Do not use another video-generation website. Stay in Google Flow unless the requested action is a harmless wait/scroll.",
-    "Inspect the CURRENT observation every turn. Button labels and layouts can change; choose the equivalent visible control.",
+    includeMission ? "You are the browser brain controlling an already-open Google Flow tab." : "Continue the SAME Google Flow video mission from our previous turns.",
+    "Choose exactly ONE next browser action from the current observation.",
+    "Do not merely give instructions. Inspect the CURRENT observation every turn and act through Google Flow.",
+    "Button labels/layouts can change; choose the equivalent visible control instead of assuming old selectors.",
     "Do not assume a textbox, New Project button, Agent button, editor, timeline, or export control exists until the observation shows it.",
-    "Generate every required clip in order. Wait for actual completion signals before proceeding. Preserve continuity. Continue through editing/export/download when the mission requires it.",
-    "Only return DONE when the requested mission is genuinely complete, not merely because a prompt was submitted.",
-    "If Google authentication/MFA is required, return FAIL and explain that manual login is required.",
+    "Generate every required clip in order. Wait for actual completion evidence before continuing. Preserve continuity. Continue through editing/export/download when the mission requires it.",
+    "Only return DONE when the requested mission is genuinely complete, not merely because a prompt was submitted or one clip exists.",
+    "If Google authentication/MFA is required, return FAIL and explain manual login is required.",
+    "Do not use another video-generation website.",
     "",
     `GOAL: ${goal}`,
-    "",
-    "VIDEO MISSION:",
-    compactMission(variables),
+    ...(includeMission ? ["", "VIDEO MISSION:", compactMission(variables)] : []),
     "",
     "CURRENT GOOGLE FLOW OBSERVATION:",
     observationText(report, rows),
@@ -95,7 +100,7 @@ function protocolPrompt(goal: string, variables: Record<string, unknown>, previo
     '{"action":"fail","reason":"manual login or unrecoverable blocker"}',
     "",
     "Prefer elementId when the control is listed. If an obvious clickable label appears only in VISIBLE PAGE TEXT, targetText may be used.",
-    "For typing, copy the exact shot prompt/voiceover/requirements from VIDEO MISSION as needed; do not invent a different project.",
+    "For typing, use the exact shot prompt/voiceover/requirements from the mission already provided; do not invent a different project.",
   ].join("\n");
 }
 
@@ -174,10 +179,12 @@ function toAgentAction(decision: BrainDecision, rows: Array<{ id: string; el: Pr
 export function buildChatGptWebDecisionHook(taskId: string, session: BrowserSession, options: BrainOptions = {}) {
   let brainPage: Page | null = null;
   let observationNumber = 0;
+  let brainInitialized = false;
 
   async function ensureBrainTab(returnTo: Page): Promise<Page> {
     if (brainPage && !brainPage.isClosed()) return brainPage;
     brainPage = await session.newTab("https://chatgpt.com/");
+    brainInitialized = false;
     await waitForComposer(brainPage);
     const returnIndex = session.tabs.indexOf(returnTo);
     if (returnIndex >= 0) session.switchTab(returnIndex);
@@ -211,11 +218,19 @@ export function buildChatGptWebDecisionHook(taskId: string, session: BrowserSess
     const brainIndex = session.tabs.indexOf(chat);
     if (brainIndex < 0) throw new Error("ChatGPT browser brain tab disappeared.");
     session.switchTab(brainIndex);
-    const prompt = protocolPrompt(goal, variables, previousActions, report, rows);
+    const prompt = protocolPrompt(goal, variables, previousActions, report, rows, !brainInitialized);
     const started = Date.now();
     try {
-      const raw = await askChatGpt(chat, prompt);
-      const decision = parseDecision(raw);
+      let raw = await askChatGpt(chat, prompt);
+      let decision: BrainDecision;
+      try {
+        decision = parseDecision(raw);
+      } catch (firstParseError) {
+        options.log?.(`Browser brain returned invalid JSON; requesting one correction: ${(firstParseError as Error).message}`);
+        raw = await askChatGpt(chat, "Your previous reply was not valid strict JSON for the browser-action protocol. Return ONLY one valid JSON action now, with no markdown or explanation.");
+        decision = parseDecision(raw);
+      }
+      brainInitialized = true;
       const action = toAgentAction(decision, rows);
       await AIRequest.create({
         taskId,

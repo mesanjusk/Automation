@@ -98,8 +98,9 @@ export class WorkflowEngine {
 
       if (outcome.error) throw outcome.error;
       const result = outcome.result!;
-      if (node.config.variableName && result.output !== undefined) {
-        state.variables[node.config.variableName] = result.output;
+      const variableName = node.config?.variableName;
+      if (variableName && result.output !== undefined) {
+        state.variables[variableName] = result.output;
       }
       await this.ctx.hooks.onStepComplete({
         stepId: node.id,
@@ -230,7 +231,6 @@ export class WorkflowEngine {
     });
   }
 
-  /** Executes a body sub-chain (LOOP/FOR_EACH) starting at startId, following .next until endId (inclusive) or a dead end. */
   private async runChain(startId: string, endId: string | undefined, state: RunState): Promise<void> {
     let nodeId: string | null = startId;
     while (nodeId) {

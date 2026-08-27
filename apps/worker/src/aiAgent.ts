@@ -1,6 +1,6 @@
 import type { BrowserSession, VisualFallback } from "@bos/browser";
 import { buildPageSnapshot } from "@bos/browser";
-import { getDefaultLLMProvider, enforceAgentSafety, getMaxAgentActions } from "@bos/ai";
+import { getDefaultLLMProvider, enforceAgentSafety, getMaxAgentActions, getGeminiTextModelName } from "@bos/ai";
 import type { AgentAction, AgentContext } from "@bos/shared";
 import { AIRequest } from "@bos/database";
 
@@ -33,7 +33,7 @@ export function buildAiDecisionHook(taskId: string, session: BrowserSession, all
       await AIRequest.create({
         taskId,
         provider: provider.name,
-        modelName: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+        modelName: provider.name === "gemini" ? getGeminiTextModelName() : provider.name,
         prompt: `goal=${goal} url=${snapshot.url}`,
         response: rawResponse,
         action,
@@ -45,7 +45,7 @@ export function buildAiDecisionHook(taskId: string, session: BrowserSession, all
       await AIRequest.create({
         taskId,
         provider: provider.name,
-        modelName: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+        modelName: provider.name === "gemini" ? getGeminiTextModelName() : provider.name,
         prompt: `goal=${goal} url=${snapshot.url}`,
         error: (err as Error).message,
         latencyMs: Date.now() - started,

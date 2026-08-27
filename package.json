@@ -24,6 +24,7 @@
     "seed": "npm run seed --workspace=packages/database",
     "seed:demo": "tsx scripts/seed-demo.ts",
     "login-helper": "tsx scripts/login-helper.ts",
+    "connect-browser": "tsx scripts/connect-browser.ts",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {

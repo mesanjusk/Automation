@@ -91,7 +91,7 @@ export async function runIdeaToFlowVideo(formData: FormData) {
     status: "QUEUED",
     input: { idea },
     browserProfileId,
-    source: "video-studio",
+    source: "dashboard",
   });
   await enqueueAutomationTask(String(task._id));
   redirect(`/tasks/${task._id}`);

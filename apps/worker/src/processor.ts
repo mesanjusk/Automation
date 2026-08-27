@@ -13,206 +13,36 @@ const WORKER_ID = process.env.WORKER_ID || `worker-${process.pid}`;
 
 export async function processTaskJob(taskId: string): Promise<void> {
   const task = await Task.findById(taskId);
-  if (!task) {
-    console.error(`[worker] Task ${taskId} not found, skipping`);
-    return;
-  }
-  if (task.status === "CANCELLED") {
-    console.log(`[worker] Task ${taskId} was cancelled before it started, skipping`);
-    return;
-  }
-
+  if (!task) { console.error(`[worker] Task ${taskId} not found, skipping`); return; }
+  if (task.status === "CANCELLED") { console.log(`[worker] Task ${taskId} was cancelled before it started, skipping`); return; }
   const workflowVersion = await WorkflowVersion.findById(task.workflowVersionId);
-  if (!workflowVersion) {
-    await failTask(task.id, "WORKFLOW_VERSION_NOT_FOUND", "The workflow version referenced by this task no longer exists.");
-    return;
-  }
+  if (!workflowVersion) { await failTask(task.id, "WORKFLOW_VERSION_NOT_FOUND", "The workflow version referenced by this task no longer exists."); return; }
   const definition = workflowVersion.definition as WorkflowDefinition;
-
   const isResume = task.status === "WAITING_FOR_HUMAN" && !!task.currentStepId;
   const startNodeId = isResume ? (task.currentStepId as string) : definition.startNodeId;
-  const initialVariables = isResume ? (task.variables as Record<string, unknown>) : { input: task.input };
-
+  const taskInput = (task.input || {}) as Record<string, unknown>;
+  const initialVariables = isResume ? (task.variables as Record<string, unknown>) : { input: taskInput, ...taskInput };
   let profile = task.browserProfileId ? await BrowserProfile.findById(task.browserProfileId).select("+encryptedStorageState") : null;
-
-  task.status = isResume ? "RUNNING" : "STARTING";
-  task.workerId = WORKER_ID;
-  if (!task.startedAt) task.startedAt = new Date();
-  await task.save();
-
+  task.status = isResume ? "RUNNING" : "STARTING"; task.workerId = WORKER_ID; if (!task.startedAt) task.startedAt = new Date(); await task.save();
   const execution = await Execution.create({ taskId: task.id, attempt: (await Execution.countDocuments({ taskId: task.id })) + 1, workerId: WORKER_ID });
-
-  const downloadDir = path.join(process.env.LOCAL_STORAGE_DIR || "./storage/local", "downloads", String(task.id));
-  await fs.mkdir(downloadDir, { recursive: true });
-
+  const downloadDir = path.join(process.env.LOCAL_STORAGE_DIR || "./storage/local", "downloads", String(task.id)); await fs.mkdir(downloadDir, { recursive: true });
   let session: BrowserSession | null = null;
   try {
     const storageState = profile?.encryptedStorageState ? decryptJSON(profile.encryptedStorageState) : undefined;
-    session = await BrowserSession.launch({
-      userAgent: profile?.userAgent,
-      viewport: profile?.viewport,
-      locale: profile?.locale,
-      timezone: profile?.timezone,
-      storageState,
-    });
-
-    task.status = "RUNNING";
-    await task.save();
-
-    const allowedAiDomains = process.env.AI_ALLOWED_DOMAINS
-      ? process.env.AI_ALLOWED_DOMAINS.split(",").map((d) => d.trim()).filter(Boolean)
-      : undefined;
-    const hooks = buildEngineHooks({ taskId: task.id, executionId: execution._id, session, allowedAiDomains });
-    const engine = new WorkflowEngine({
-      definition,
-      session,
-      hooks,
-      downloadDir,
-      options: {
-        maxAiActions: Number(process.env.MAX_AI_ACTIONS ?? 100),
-        allowedAiDomains,
-        visualFallback: buildVisualFallback(),
-        resolveSecret: buildSecretResolver(profile?.id ? String(profile.id) : undefined),
-      },
-    });
-
+    session = await BrowserSession.launch({ userAgent: profile?.userAgent, viewport: profile?.viewport, locale: profile?.locale, timezone: profile?.timezone, storageState });
+    task.status = "RUNNING"; await task.save();
+    const engine = new WorkflowEngine({ definition, session, downloadDir, hooks: buildEngineHooks(task, execution), options: { visualFallback: buildVisualFallback(), resolveSecret: async (name: string) => { const credential = await Credential.findOne({ name, status: "active" }).select("+encryptedValue"); return credential?.encryptedValue ? decrypt(credential.encryptedValue) : undefined; } } });
     const result = await engine.run(startNodeId, initialVariables);
-
-    // Persist browser profile session state (cookies/localStorage) for reuse,
-    // regardless of outcome, so a manual login done earlier keeps working.
-    if (profile) {
-      const newState = await session.exportStorageState();
-      profile.encryptedStorageState = encryptJSON(newState);
-      profile.status = "ready";
-      profile.lastUsedAt = new Date();
-      await profile.save();
-    }
-
-    if (result.status === "completed") {
-      task.status = "COMPLETED";
-      task.output = result.variables;
-      task.completedAt = new Date();
-      task.duration = task.startedAt ? task.completedAt.getTime() - task.startedAt.getTime() : undefined;
-      await task.save();
-      execution.status = "completed";
-      execution.completedAt = new Date();
-      await execution.save();
-      await sendWebhook(task, "automation.completed", result.variables);
-    } else if (result.status === "paused") {
-      task.status = "WAITING_FOR_HUMAN";
-      task.currentStepId = result.lastNodeId;
-      task.variables = result.variables;
-      await task.save();
-      execution.status = "paused";
-      await execution.save();
-      await sendWebhook(task, "automation.human_intervention_required", result.variables);
-    } else if (result.status === "cancelled") {
-      task.status = "CANCELLED";
-      task.completedAt = new Date();
-      task.duration = task.startedAt ? task.completedAt.getTime() - task.startedAt.getTime() : undefined;
-      await task.save();
-      execution.status = "failed";
-      execution.completedAt = new Date();
-      await execution.save();
-      await sendWebhook(task, "automation.cancelled", result.variables);
-    } else if (result.error?.category === "HUMAN_INTERVENTION_REQUIRED") {
-      // CAPTCHA / MFA / unknown page state: don't fail the task — pause it so
-      // a human can complete the blocking step (e.g. via the login-helper)
-      // and hit Resume, which re-enters the workflow at the same node.
-      task.status = "WAITING_FOR_HUMAN";
-      task.currentStepId = result.error.stepId ?? result.lastNodeId;
-      task.variables = result.variables;
-      task.error = result.error as Record<string, unknown>;
-      await task.save();
-      execution.status = "paused";
-      await execution.save();
-      await sendWebhook(task, "automation.human_intervention_required", result.variables, result.error as Record<string, unknown>);
-    } else {
-      task.status = "FAILED";
-      task.error = result.error as Record<string, unknown>;
-      task.completedAt = new Date();
-      task.duration = task.startedAt ? task.completedAt.getTime() - task.startedAt.getTime() : undefined;
-      await task.save();
-      execution.status = "failed";
-      execution.completedAt = new Date();
-      await execution.save();
-      await sendWebhook(task, "automation.failed", undefined, result.error as Record<string, unknown>);
-    }
-  } catch (err) {
-    console.error(`[worker] Unhandled error running task ${taskId}:`, err);
-    task.status = "FAILED";
-    task.error = { message: (err as Error).message, category: "PERMANENT", retryable: false };
-    task.completedAt = new Date();
-    await task.save();
-    execution.status = "failed";
-    execution.completedAt = new Date();
-    await execution.save();
-    await sendWebhook(task, "automation.failed", undefined, task.error);
-  } finally {
-    if (session) await session.close();
-  }
+    task.variables = result.variables;
+    if (result.status === "completed") { task.status = "COMPLETED"; task.completedAt = new Date(); task.output = result.variables; }
+    else if (result.status === "cancelled") { task.status = "CANCELLED"; task.completedAt = new Date(); }
+    else if (result.status === "paused") { task.status = "WAITING_FOR_HUMAN"; task.currentStepId = result.lastNodeId; }
+    else { task.status = "FAILED"; task.completedAt = new Date(); task.error = result.error; }
+    if (task.startedAt && task.completedAt) task.duration = task.completedAt.getTime() - task.startedAt.getTime(); await task.save();
+    execution.status = task.status === "COMPLETED" ? "COMPLETED" : task.status === "FAILED" ? "FAILED" : task.status === "CANCELLED" ? "CANCELLED" : "RUNNING"; execution.completedAt = task.completedAt; execution.output = result.variables; if (result.error) execution.error = result.error; await execution.save();
+    if (task.callbackUrl && ["COMPLETED","FAILED","CANCELLED"].includes(task.status)) await enqueueWebhook(task.callbackUrl, { taskId: String(task.id), status: task.status, output: task.output, error: task.error }, undefined);
+  } catch (err) { console.error(`[worker] task ${task.id} crashed:`, err); await failTask(task.id, "WORKER_ERROR", (err as Error).message); execution.status = "FAILED"; execution.error = { message: (err as Error).message }; execution.completedAt = new Date(); await execution.save(); }
+  finally { if (session) { try { if (profile) { const state = await session.exportStorageState(); profile.encryptedStorageState = encryptJSON(state); profile.lastUsedAt = new Date(); await profile.save(); } } catch (e) { console.error("[worker] failed to persist browser profile:", e); } await session.close(); } }
 }
 
-async function failTask(taskId: string, code: string, message: string): Promise<void> {
-  await Task.findByIdAndUpdate(taskId, {
-    status: "FAILED",
-    error: { errorCode: code, message, retryable: false },
-    completedAt: new Date(),
-  });
-}
-
-async function sendWebhook(
-  task: InstanceType<typeof Task>,
-  event: WebhookEvent["event"],
-  result?: Record<string, unknown>,
-  error?: Record<string, unknown>
-): Promise<void> {
-  const files = await FileModel.find({ taskId: task.id }).select("_id name url").lean();
-  const payload: WebhookEvent = {
-    event,
-    automationId: String(task.automationId),
-    taskId: String(task.id),
-    status: task.status,
-    result,
-    error,
-    files: files.map((f) => ({ id: String(f._id), name: f.name, url: f.url })),
-    timestamp: new Date().toISOString(),
-  };
-
-  // 1. The per-task callback URL (set by the caller of /api/v1/automations/run
-  //    or on the automation itself) — the primary CRM integration channel.
-  if (task.callbackUrl) {
-    await enqueueWebhook({ webhookUrl: task.callbackUrl, payload });
-  }
-
-  // 2. Webhook subscriptions registered from the dashboard (Webhooks page):
-  //    every enabled endpoint subscribed to this event, either globally or
-  //    scoped to this automation. Signed with the endpoint's secret if set.
-  const subscriptions = await Webhook.find({
-    enabled: true,
-    events: event,
-    $or: [{ automationId: { $exists: false } }, { automationId: null }, { automationId: task.automationId }],
-  }).select("+secret");
-  for (const hook of subscriptions) {
-    if (hook.url === task.callbackUrl) continue; // avoid double delivery
-    await enqueueWebhook({ webhookUrl: hook.url, secret: hook.secret ?? undefined, payload });
-    hook.lastDeliveryAt = new Date();
-    await hook.save();
-  }
-}
-
-/**
- * Resolves {{secret:credentialName}} tokens for the browser executor.
- * Decrypts just-in-time and returns the plaintext directly to Playwright —
- * it is never written into engine variables, so it can't leak into an AI
- * prompt, an ExecutionStep log, or a webhook payload.
- */
-function buildSecretResolver(browserProfileId?: string) {
-  return async (name: string): Promise<string | undefined> => {
-    const query: Record<string, unknown> = { name };
-    if (browserProfileId) query.browserProfileId = browserProfileId;
-    const credential = await Credential.findOne(query).select("+encryptedValue");
-    if (!credential) return undefined;
-    return decrypt(credential.encryptedValue);
-  };
-}
+async function failTask(taskId: string, category: string, message: string) { await Task.findByIdAndUpdate(taskId, { status: "FAILED", completedAt: new Date(), error: { category, message } }); }

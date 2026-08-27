@@ -163,7 +163,7 @@ export class WorkflowEngine {
 
       case "AI_DECISION": {
         await this.runAiDecisionLoop(node, state);
-        await this.complete(node, started, { actionsSoFar: state.aiActionsSoFar });
+        await this.complete(node, started, { actionsSoFar: state.aiActionsSoFar, result: state.variables.browserAgentResult });
         return { next: node.next ?? null };
       }
 
@@ -244,6 +244,7 @@ export class WorkflowEngine {
   private async runAiDecisionLoop(node: WorkflowNode, state: RunState): Promise<void> {
     const maxActions = this.ctx.options.maxAiActions ?? 100;
     const goal = node.config.prompt ?? node.name;
+    let consecutiveActionFailures = 0;
 
     for (;;) {
       if (state.aiActionsSoFar >= maxActions) {
@@ -258,11 +259,16 @@ export class WorkflowEngine {
       if (!this.ctx.hooks.decideNextAiAction) {
         throw new Error("AI_DECISION node used but no decideNextAiAction hook was provided");
       }
+
       const action = await this.ctx.hooks.decideNextAiAction(goal, state.variables, state.aiPreviousActions);
       state.aiActionsSoFar += 1;
       state.aiPreviousActions.push(action);
 
-      if (action.tool === "task_complete") return;
+      if (action.tool === "task_complete") {
+        state.variables.browserAgentResult = { status: "completed", reason: action.reason, actions: state.aiActionsSoFar };
+        delete state.variables.browserAgentLastError;
+        return;
+      }
       if (action.tool === "task_fail") {
         throw new AutomationError({
           errorCode: "AI_TASK_FAIL",
@@ -274,27 +280,59 @@ export class WorkflowEngine {
       }
 
       const syntheticNode = agentActionToWorkflowNode(action, `${node.id}:ai:${state.aiActionsSoFar}`);
-      const result = await executeBrowserAction(this.ctx.session, syntheticNode, {
-        variables: state.variables,
-        downloadDir: this.ctx.downloadDir,
-        visualFallback: this.ctx.options.visualFallback,
-        resolveSecret: this.ctx.options.resolveSecret,
-        emitScreenshot: this.ctx.hooks.onScreenshot?.bind(this.ctx.hooks),
-        log: this.ctx.hooks.log?.bind(this.ctx.hooks),
-      });
-      if (action.resultVariable && result.output !== undefined) {
-        state.variables[action.resultVariable] = result.output;
+      try {
+        const result = await executeBrowserAction(this.ctx.session, syntheticNode, {
+          variables: state.variables,
+          downloadDir: this.ctx.downloadDir,
+          visualFallback: this.ctx.options.visualFallback,
+          resolveSecret: this.ctx.options.resolveSecret,
+          emitScreenshot: this.ctx.hooks.onScreenshot?.bind(this.ctx.hooks),
+          log: this.ctx.hooks.log?.bind(this.ctx.hooks),
+        });
+        consecutiveActionFailures = 0;
+        delete state.variables.browserAgentLastError;
+        if (action.resultVariable && result.output !== undefined) {
+          state.variables[action.resultVariable] = result.output;
+        }
+        if (result.downloadedFilePath) {
+          state.variables.browserAgentLastDownload = result.downloadedFilePath;
+        }
+        await this.ctx.hooks.onStepComplete({
+          stepId: syntheticNode.id,
+          nodeType: syntheticNode.type,
+          nodeName: syntheticNode.name,
+          status: "SUCCESS",
+          output: result.output,
+          duration: 0,
+          selectorStrategyUsed: result.selectorStrategyUsed,
+          screenshotBuffer: result.screenshotBuffer,
+        });
+      } catch (err) {
+        consecutiveActionFailures += 1;
+        const message = (err as Error).message;
+        state.variables.browserAgentLastError = message;
+        this.ctx.hooks.log?.(`Adaptive browser action failed (${consecutiveActionFailures}/5): ${message}. Re-observing and replanning.`);
+        await this.ctx.hooks.onStepComplete({
+          stepId: syntheticNode.id,
+          nodeType: syntheticNode.type,
+          nodeName: syntheticNode.name,
+          status: "FAILED",
+          duration: 0,
+          error: { message, category: "TRANSIENT", retryable: true },
+        });
+        if (consecutiveActionFailures >= 5) {
+          throw new AutomationError({
+            errorCode: "BROWSER_AGENT_STALLED",
+            message: `Adaptive browser agent had ${consecutiveActionFailures} consecutive browser-action failures. Last error: ${message}`,
+            category: "WEBSITE_CHANGED",
+            retryable: false,
+            stepId: node.id,
+          });
+        }
+        // Do not fail the mission because one element went stale. The next
+        // decision gets a fresh live observation plus browserAgentLastError.
+        continue;
       }
-      await this.ctx.hooks.onStepComplete({
-        stepId: syntheticNode.id,
-        nodeType: syntheticNode.type,
-        nodeName: syntheticNode.name,
-        status: "SUCCESS",
-        output: result.output,
-        duration: 0,
-        selectorStrategyUsed: result.selectorStrategyUsed,
-        screenshotBuffer: result.screenshotBuffer,
-      });
     }
   }
 }

@@ -21,8 +21,11 @@ import { saveWorkflowDraft, publishWorkflowVersion, generateWorkflowDraftFromDes
 import { Sparkles, Save, Rocket, Plus } from "lucide-react";
 
 const CATEGORIES: Record<string, NodeType[]> = {
-  Browser: ["NAVIGATE", "CLICK", "TYPE", "CLEAR", "SELECT", "HOVER", "PRESS_KEY", "SCROLL", "UPLOAD_FILE", "DOWNLOAD_FILE"],
-  Navigation: ["NEW_TAB", "SWITCH_TAB", "CLOSE_TAB", "GO_BACK", "GO_FORWARD", "WAIT", "WAIT_FOR_SELECTOR", "WAIT_FOR_NAVIGATION"],
+  Browser: ["NAVIGATE", "CLICK", "TYPE", "CLEAR", "SELECT", "HOVER", "PRESS_KEY", "SCROLL", "SCROLL_TO_ELEMENT", "UPLOAD_FILE", "DOWNLOAD_FILE"],
+  Navigation: ["NEW_TAB", "SWITCH_TAB", "CLOSE_TAB", "GO_BACK", "GO_FORWARD", "WAIT", "WAIT_FOR_SELECTOR", "WAIT_FOR_TEXT", "WAIT_FOR_NAVIGATION"],
+  // Nodes that look at the real page instead of assuming its shape. Reach for
+  // these whenever the markup is not knowable when the workflow is written.
+  Discovery: ["PROBE_PAGE", "WAIT_FOR_STATE", "FLOW_NAVIGATE"],
   Data: ["EXTRACT_TEXT", "EXTRACT_ATTRIBUTE", "SCREENSHOT", "SET_VARIABLE", "GET_VARIABLE", "EXECUTE_JS"],
   Logic: ["CONDITION", "LOOP", "FOR_EACH", "END", "FAIL"],
   AI: ["AI_DECISION"],
@@ -315,8 +318,11 @@ function NodeEditor({ node, onChange }: { node: WorkflowNode; onChange: (patch: 
           className="mt-1 font-mono text-xs"
         />
         <p className="mt-1 text-xs text-muted-foreground">
-          Common fields: target ({`{css,text,role,ariaLabel,testId}`}), value, url, variableName, condition, trueNodeId/falseNodeId,
-          bodyNodeId/bodyEndNodeId/loopCount, prompt (AI_DECISION), approvalMessage (HUMAN_APPROVAL), webhookUrl.
+          Common fields: target ({`{ref,css,text,role,ariaLabel,testId,frame,nth,preferSemantic,editable}`}), value, url,
+          variableName, condition, trueNodeId/falseNodeId, bodyNodeId/bodyEndNodeId/loopCount, text/absent (WAIT_FOR_TEXT),
+          prompt (AI_DECISION), approvalMessage (HUMAN_APPROVAL), webhookUrl. Prefer role/text with preferSemantic over a
+          generated CSS class — it survives a redesign. Mutating nodes wait for the page to settle afterwards; set
+          settle: false (or settleMs) to change that.
         </p>
       </div>
     </div>

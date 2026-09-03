@@ -13,6 +13,9 @@ function report(partial: Partial<PageProbeReport>): PageProbeReport {
     elements: [],
     hiddenInteractiveCount: 0,
     frames: [],
+    inaccessibleFrames: 0,
+    dialogs: [],
+    scroll: { y: 0, height: 900, viewport: 900, atBottom: true },
     media: { videos: 0, playableVideos: 0, progressBars: 0 },
     liveRegions: [],
     probedAt: new Date().toISOString(),
@@ -22,30 +25,46 @@ function report(partial: Partial<PageProbeReport>): PageProbeReport {
 
 const COMPOSER = {
   index: 0,
+  ref: "e1",
+  frame: null,
   tag: "textarea",
   role: "textbox",
   name: "Generate a video with text",
   ariaLabel: null,
   placeholder: "Generate a video with text",
   text: "",
+  value: null,
   testId: null,
   href: null,
   type: null,
   visible: true,
   disabled: false,
   editable: true,
+  checked: null,
+  expanded: null,
   inViewport: true,
   rect: { x: 200, y: 700, width: 800, height: 90 },
   cssPath: "main > textarea",
   attrs: {},
 };
 
-/** A page whose successive probes return the given scripted reports. */
+/**
+ * A page whose successive probes return the given scripted reports.
+ *
+ * probePage() evaluates twice per probe: a string expression that seeds the
+ * esbuild `__name` helper in the page realm, then the probe callback itself.
+ * Only the callback is a probe, so only the callback advances the script —
+ * counting both made every probe consume two reports and silently skipped the
+ * landing page these tests exist to exercise.
+ */
 function scriptedPage(reports: PageProbeReport[]) {
   let index = 0;
   const click = vi.fn(async () => undefined);
   const page = {
-    evaluate: async () => reports[Math.min(index++, reports.length - 1)],
+    evaluate: async (source: unknown) => {
+      if (typeof source !== "function") return undefined;
+      return reports[Math.min(index++, reports.length - 1)];
+    },
     screenshot: async () => Buffer.from("png"),
     url: () => reports[Math.min(index, reports.length - 1)]?.url ?? "",
     locator: () => ({ first: () => ({ click }) }),

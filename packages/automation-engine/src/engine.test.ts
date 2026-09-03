@@ -4,7 +4,7 @@ const executeBrowserAction = vi.fn();
 
 vi.mock("@bos/browser", () => ({
   executeBrowserAction: (...args: unknown[]) => executeBrowserAction(...args),
-  BROWSER_NODE_TYPES: ["NAVIGATE", "CLICK", "TYPE", "EXTRACT_TEXT", "SCREENSHOT"],
+  BROWSER_NODE_TYPES: ["NAVIGATE", "CLICK", "TYPE", "EXTRACT_TEXT", "SCREENSHOT", "PROBE_PAGE", "SCROLL"],
 }));
 
 const { WorkflowEngine } = await import("./engine.js");
@@ -137,6 +137,99 @@ describe("WorkflowEngine", () => {
           { id: "end", type: "END", name: "Done", config: {} },
         ],
       });
+
+    it("stops an agent that keeps issuing the identical action on an unresponsive page", async () => {
+      // The classic runaway: the model clicks a control that does nothing and,
+      // seeing an unchanged page, clicks it again. Without a guard this burns
+      // the entire action budget on one dead button.
+      const decideNextAiAction = vi.fn().mockResolvedValue({
+        tool: "browser_click",
+        target: { ref: "e9" },
+        reason: "the Continue button should advance the form",
+      });
+      const hooks = makeHooks({ decideNextAiAction });
+      const definition = missionDefinition();
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks, options: {}, downloadDir: "/tmp" });
+
+      const result = await engine.run(definition.startNodeId);
+
+      expect(result.status).toBe("failed");
+      expect(result.error?.message).toMatch(/repeated the same action/);
+      expect(decideNextAiAction.mock.calls.length).toBeLessThan(10);
+    });
+
+    it("warns before it gives up, so the agent gets a chance to change course", async () => {
+      const warnings: Array<unknown> = [];
+      const decideNextAiAction = vi.fn(async (_goal: string, variables: Record<string, unknown>) => {
+        warnings.push(variables.browserAgentRepeatWarning);
+        // Break the loop on the third turn by aiming somewhere else.
+        if (warnings.length >= 3) return { tool: "task_complete", reason: "found another way" } as never;
+        return { tool: "browser_click", target: { ref: "e9" }, reason: "try Continue" } as never;
+      });
+      const hooks = makeHooks({ decideNextAiAction });
+      const definition = missionDefinition();
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks, options: {}, downloadDir: "/tmp" });
+
+      const result = await engine.run(definition.startNodeId);
+
+      expect(result.status).toBe("completed");
+      expect(warnings[0]).toBeUndefined();
+      expect(String(warnings[2])).toContain("identical action");
+    });
+
+    it("reports the last action so the next observation can say what it changed", async () => {
+      const seen: Array<unknown> = [];
+      const decideNextAiAction = vi.fn(async (_goal: string, variables: Record<string, unknown>) => {
+        seen.push(variables.browserAgentLastAction);
+        if (seen.length === 1) {
+          return { tool: "browser_click", target: { ref: "e2" }, reason: "open the menu", expectation: "the menu opens" } as never;
+        }
+        return { tool: "task_complete", reason: "menu is open" } as never;
+      });
+      const hooks = makeHooks({ decideNextAiAction });
+      const definition = missionDefinition();
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks, options: {}, downloadDir: "/tmp" });
+      await engine.run(definition.startNodeId);
+
+      expect(seen[0]).toBeUndefined();
+      expect(seen[1]).toMatchObject({ tool: "browser_click", status: "success", expectation: "the menu opens" });
+    });
+
+    it("ends the run on a boundary violation instead of re-asking five times", async () => {
+      // Leaving the domain allowlist cannot be re-prompted away, so retrying it
+      // only spends the action budget on an answer that can never be accepted.
+      const violation = Object.assign(new Error("AI attempted to navigate to a domain outside the allowlist"), {
+        name: "AgentSafetyViolation",
+        terminal: true,
+      });
+      const decideNextAiAction = vi.fn().mockRejectedValue(violation);
+      const hooks = makeHooks({ decideNextAiAction });
+      const definition = missionDefinition();
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks, options: {}, downloadDir: "/tmp" });
+
+      const result = await engine.run(definition.startNodeId);
+
+      expect(result.status).toBe("failed");
+      expect(result.error?.retryable).toBe(false);
+      expect(decideNextAiAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("still re-observes past a merely malformed tool call", async () => {
+      const slip = Object.assign(new Error('"browser_click" needs a target element'), {
+        name: "AgentSafetyViolation",
+        terminal: false,
+      });
+      const decideNextAiAction = vi
+        .fn()
+        .mockRejectedValueOnce(slip)
+        .mockResolvedValueOnce({ tool: "task_complete", reason: "recovered" });
+      const hooks = makeHooks({ decideNextAiAction });
+      const definition = missionDefinition();
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks, options: {}, downloadDir: "/tmp" });
+
+      expect((await engine.run(definition.startNodeId)).status).toBe("completed");
+      expect(decideNextAiAction).toHaveBeenCalledTimes(2);
+    });
 
     it("re-observes and carries on when the brain fails to produce a decision", async () => {
       const decideNextAiAction = vi

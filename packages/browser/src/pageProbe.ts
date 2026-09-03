@@ -10,19 +10,36 @@ import type { Page } from "playwright";
  * file hard-codes a class name or a product-specific selector.
  */
 export interface ProbedElement {
+  /**
+   * Stable handle stamped onto the DOM node itself (`data-bos-ref="e12"`).
+   *
+   * This is what makes an agent accurate rather than merely plausible: the
+   * model is shown `e12` and can act on `e12`, so there is no lossy round trip
+   * from "the element I saw" through a description and back to "an element
+   * that matches that description". Refs survive re-renders that move an
+   * element (the attribute travels with the node) and are reused across
+   * probes of the same document, so `e12` means the same control every turn.
+   */
+  ref: string;
   index: number;
+  /** CSS path of the owning iframe, or null when the element is in the main frame. */
+  frame: string | null;
   tag: string;
   role: string;
   name: string;
   ariaLabel: string | null;
   placeholder: string | null;
   text: string;
+  /** Current value of an input/textarea — lets the agent see what it already typed. */
+  value: string | null;
   testId: string | null;
   href: string | null;
   type: string | null;
   visible: boolean;
   disabled: boolean;
   editable: boolean;
+  checked: boolean | null;
+  expanded: boolean | null;
   inViewport: boolean;
   rect: { x: number; y: number; width: number; height: number };
   cssPath: string;
@@ -37,15 +54,25 @@ export interface PageProbeReport {
   elements: ProbedElement[];
   hiddenInteractiveCount: number;
   frames: string[];
+  /** Frames whose contents could not be read (cross-origin) — the agent is told so it does not assume an empty page. */
+  inaccessibleFrames: number;
   media: { videos: number; playableVideos: number; progressBars: number };
   liveRegions: string[];
+  /** Open modal dialogs/alerts. A modal makes everything behind it unclickable, so it is called out separately. */
+  dialogs: string[];
+  scroll: { y: number; height: number; viewport: number; atBottom: boolean };
   probedAt: string;
 }
 
 export interface PageProbeOptions {
   maxElements?: number;
   maxTextLength?: number;
+  /** Follow same-origin iframes. On by default — an agent that cannot see into a frame is blind to checkout forms, editors and embedded sign-ins. */
+  includeFrames?: boolean;
 }
+
+/** Attribute used to stamp element refs. Public so the selector resolver can bind to it. */
+export const REF_ATTRIBUTE = "data-bos-ref";
 
 /**
  * Runs the probe inside the page and returns what is really on screen.
@@ -59,6 +86,7 @@ export interface PageProbeOptions {
 export async function probePage(page: Page, opts: PageProbeOptions = {}): Promise<PageProbeReport> {
   const maxElements = opts.maxElements ?? 120;
   const maxTextLength = opts.maxTextLength ?? 6000;
+  const includeFrames = opts.includeFrames !== false;
 
   await page.evaluate(`globalThis.__name = globalThis.__name || ((target, value) => {
     try { Object.defineProperty(target, "name", { value, configurable: true }); } catch {}
@@ -66,7 +94,7 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
   })`);
 
   const report = await page.evaluate(
-    ({ maxElements, maxTextLength }: { maxElements: number; maxTextLength: number }) => {
+    ({ maxElements, maxTextLength, includeFrames, refAttr }: { maxElements: number; maxTextLength: number; includeFrames: boolean; refAttr: string }) => {
       const IMPLICIT_ROLES: Record<string, string> = {
         a: "link", button: "button", textarea: "textbox", select: "combobox",
         summary: "button", video: "video", img: "img", h1: "heading", h2: "heading",
@@ -78,13 +106,25 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
       const clean = (value: string | null | undefined, cap: number): string =>
         (value ?? "").replace(/\s+/g, " ").trim().slice(0, cap);
 
-      const isVisible = (el: Element): boolean => {
-        const style = window.getComputedStyle(el);
+      // Refs live on the node, so a re-render that moves an element keeps its
+      // identity, and a control the agent saw last turn keeps the same handle.
+      const store = globalThis as unknown as { __bosRefSeq?: number };
+      const refFor = (el: Element): string => {
+        const existing = el.getAttribute(refAttr);
+        if (existing) return existing;
+        store.__bosRefSeq = (store.__bosRefSeq ?? 0) + 1;
+        const ref = `e${store.__bosRefSeq}`;
+        try { el.setAttribute(refAttr, ref); } catch { /* frozen/readonly node — fall back to hints */ }
+        return ref;
+      };
+
+      const isVisible = (el: Element, view: Window): boolean => {
+        const style = view.getComputedStyle(el);
         if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
         if (Number(style.opacity) < 0.05) return false;
         const rect = el.getBoundingClientRect();
         if (rect.width < 2 || rect.height < 2) return false;
-        if (rect.right + window.scrollX <= 0 || rect.bottom + window.scrollY <= 0) return false;
+        if (rect.right + view.scrollX <= 0 || rect.bottom + view.scrollY <= 0) return false;
         return true;
       };
 
@@ -105,17 +145,17 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
         return IMPLICIT_ROLES[tag] ?? "generic";
       };
 
-      const accessibleName = (el: Element): string => {
+      const accessibleName = (el: Element, doc: Document): string => {
         const label = el.getAttribute("aria-label");
         if (label && label.trim()) return clean(label, 160);
         const labelledBy = el.getAttribute("aria-labelledby");
         if (labelledBy) {
-          const parts = labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+          const parts = labelledBy.split(/\s+/).map((id) => doc.getElementById(id)?.textContent ?? "").join(" ");
           if (parts.trim()) return clean(parts, 160);
         }
         const id = el.getAttribute("id");
         if (id) {
-          const forLabel = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+          const forLabel = doc.querySelector(`label[for="${CSS.escape(id)}"]`);
           if (forLabel?.textContent?.trim()) return clean(forLabel.textContent, 160);
         }
         const closestLabel = el.closest("label");
@@ -145,14 +185,22 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
       const isDisabled = (el: Element): boolean =>
         (el as HTMLButtonElement).disabled === true || el.getAttribute("aria-disabled") === "true";
 
-      const cssPathFor = (el: Element): string => {
+      const triState = (el: Element, attr: string, prop: "checked"): boolean | null => {
+        const aria = el.getAttribute(attr);
+        if (aria === "true") return true;
+        if (aria === "false") return false;
+        const value = (el as unknown as Record<string, unknown>)[prop];
+        return typeof value === "boolean" ? value : null;
+      };
+
+      const cssPathFor = (el: Element, doc: Document): string => {
         const id = el.getAttribute("id");
-        if (id && /^[A-Za-z][\w-]*$/.test(id) && document.querySelectorAll(`#${CSS.escape(id)}`).length === 1) return `#${CSS.escape(id)}`;
+        if (id && /^[A-Za-z][\w-]*$/.test(id) && doc.querySelectorAll(`#${CSS.escape(id)}`).length === 1) return `#${CSS.escape(id)}`;
         for (const attr of ["data-testid", "data-test-id", "data-test"]) {
           const value = el.getAttribute(attr);
           if (value) {
             const selector = `[${attr}="${CSS.escape(value)}"]`;
-            if (document.querySelectorAll(selector).length === 1) return selector;
+            if (doc.querySelectorAll(selector).length === 1) return selector;
           }
         }
         const parts: string[] = [];
@@ -169,52 +217,102 @@ export async function probePage(page: Page, opts: PageProbeOptions = {}): Promis
         return parts.join(" > ");
       };
 
-      const selector = ["a[href]","button","input","textarea","select","summary","video","[contenteditable='']","[contenteditable='true']","[role]","[aria-label]","[tabindex]:not([tabindex='-1'])"].join(",");
-      const all = Array.prototype.slice.call(document.querySelectorAll(selector)) as Element[];
-      const viewportHeight = window.innerHeight || 0;
-      const viewportWidth = window.innerWidth || 0;
-      const visible: ProbedElement[] = [];
-      let hiddenInteractiveCount = 0;
+      const INTERACTIVE = ["a[href]","button","input","textarea","select","summary","video","[contenteditable='']","[contenteditable='true']","[role]","[aria-label]","[tabindex]:not([tabindex='-1'])"].join(",");
 
-      for (const el of all) {
-        if (!isVisible(el)) { hiddenInteractiveCount += 1; continue; }
-        const rect = el.getBoundingClientRect();
-        const attrs: Record<string, string> = {};
-        for (const attr of STABLE_ATTRS) {
-          const value = el.getAttribute(attr);
-          if (value !== null) attrs[attr] = clean(value, 120);
+      const collected: ProbedElement[] = [];
+      const framesSeen: string[] = [];
+      let hiddenInteractiveCount = 0;
+      let inaccessibleFrames = 0;
+
+      const collect = (doc: Document, view: Window, framePath: string | null): void => {
+        const all = Array.prototype.slice.call(doc.querySelectorAll(INTERACTIVE)) as Element[];
+        const viewportHeight = view.innerHeight || 0;
+        const viewportWidth = view.innerWidth || 0;
+        for (const el of all) {
+          if (collected.length >= maxElements) return;
+          if (!isVisible(el, view)) { hiddenInteractiveCount += 1; continue; }
+          const rect = el.getBoundingClientRect();
+          const attrs: Record<string, string> = {};
+          for (const attr of STABLE_ATTRS) {
+            const value = el.getAttribute(attr);
+            if (value !== null) attrs[attr] = clean(value, 120);
+          }
+          const expandedAttr = el.getAttribute("aria-expanded");
+          collected.push({
+            ref: refFor(el), index: collected.length, frame: framePath,
+            tag: el.tagName.toLowerCase(), role: roleOf(el), name: accessibleName(el, doc),
+            ariaLabel: el.getAttribute("aria-label"), placeholder: el.getAttribute("placeholder") || el.getAttribute("data-placeholder"),
+            text: clean((el as HTMLElement).innerText || el.textContent, 200),
+            value: clean((el as HTMLInputElement).value, 200) || null,
+            testId: el.getAttribute("data-testid") || el.getAttribute("data-test-id"),
+            href: el.getAttribute("href"), type: el.getAttribute("type"), visible: true,
+            disabled: isDisabled(el), editable: isEditable(el),
+            checked: triState(el, "aria-checked", "checked"),
+            expanded: expandedAttr === "true" ? true : expandedAttr === "false" ? false : null,
+            inViewport: rect.bottom > 0 && rect.top < viewportHeight && rect.right > 0 && rect.left < viewportWidth,
+            rect: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+            cssPath: cssPathFor(el, doc), attrs,
+          });
         }
-        visible.push({
-          index: visible.length, tag: el.tagName.toLowerCase(), role: roleOf(el), name: accessibleName(el),
-          ariaLabel: el.getAttribute("aria-label"), placeholder: el.getAttribute("placeholder") || el.getAttribute("data-placeholder"),
-          text: clean((el as HTMLElement).innerText || el.textContent, 200), testId: el.getAttribute("data-testid") || el.getAttribute("data-test-id"),
-          href: el.getAttribute("href"), type: el.getAttribute("type"), visible: true, disabled: isDisabled(el), editable: isEditable(el),
-          inViewport: rect.bottom > 0 && rect.top < viewportHeight && rect.right > 0 && rect.left < viewportWidth,
-          rect: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
-          cssPath: cssPathFor(el), attrs,
-        });
-        if (visible.length >= maxElements) break;
+      };
+
+      collect(document, window, null);
+
+      // Same-origin iframes are part of the page as far as a user is
+      // concerned — payment forms, rich editors and embedded sign-ins all live
+      // in one. Their elements carry the iframe's own CSS path so the resolver
+      // can scope back into the right frame.
+      if (includeFrames) {
+        const iframes = Array.prototype.slice.call(document.querySelectorAll("iframe")) as HTMLIFrameElement[];
+        for (const iframe of iframes.slice(0, 10)) {
+          const src = iframe.src || "(about:blank)";
+          framesSeen.push(src);
+          if (collected.length >= maxElements) continue;
+          let inner: Document | null = null;
+          try { inner = iframe.contentDocument; } catch { inner = null; }
+          if (!inner || !iframe.contentWindow) { inaccessibleFrames += 1; continue; }
+          if (!isVisible(iframe, window)) continue;
+          try {
+            collect(inner, iframe.contentWindow, cssPathFor(iframe, document));
+          } catch {
+            inaccessibleFrames += 1;
+          }
+        }
+      } else {
+        for (const iframe of Array.prototype.slice.call(document.querySelectorAll("iframe")) as HTMLIFrameElement[]) {
+          framesSeen.push(iframe.src || "(about:blank)");
+        }
       }
 
       const videos = Array.prototype.slice.call(document.querySelectorAll("video")) as HTMLVideoElement[];
       const liveRegions = (Array.prototype.slice.call(document.querySelectorAll("[aria-live], [role='status'], [role='alert']")) as Element[])
         .map((el) => clean((el as HTMLElement).innerText || el.textContent, 200)).filter((text) => text.length > 0).slice(0, 10);
+      const dialogs = (Array.prototype.slice.call(document.querySelectorAll("[role='dialog'], [role='alertdialog'], dialog[open]")) as Element[])
+        .filter((el) => isVisible(el, window))
+        .map((el) => clean(el.getAttribute("aria-label") || (el as HTMLElement).innerText || el.textContent, 300))
+        .filter((text) => text.length > 0).slice(0, 5);
+
+      const scrollY = Math.round(window.scrollY);
+      const docHeight = Math.round(document.documentElement?.scrollHeight ?? 0);
+      const viewport = Math.round(window.innerHeight || 0);
 
       return {
         url: location.href, title: document.title, readyState: document.readyState,
-        visibleText: clean(document.body?.innerText, maxTextLength), elements: visible, hiddenInteractiveCount,
-        frames: (Array.prototype.slice.call(document.querySelectorAll("iframe")) as HTMLIFrameElement[]).map((frame) => frame.src || "(about:blank)").slice(0, 10),
+        visibleText: clean(document.body?.innerText, maxTextLength), elements: collected, hiddenInteractiveCount,
+        frames: framesSeen.slice(0, 10), inaccessibleFrames,
         media: { videos: videos.length, playableVideos: videos.filter((video) => (video.src || video.currentSrc || "").length > 0).length, progressBars: document.querySelectorAll("[role='progressbar'], progress").length },
-        liveRegions, probedAt: new Date().toISOString(),
+        liveRegions, dialogs,
+        scroll: { y: scrollY, height: docHeight, viewport, atBottom: docHeight - (scrollY + viewport) <= 4 },
+        probedAt: new Date().toISOString(),
       };
     },
-    { maxElements, maxTextLength }
+    { maxElements, maxTextLength, includeFrames, refAttr: REF_ATTRIBUTE }
   );
 
   return report as PageProbeReport;
 }
 
 export function summariseProbe(report: PageProbeReport, limit = 25): string {
-  const rows = report.elements.slice(0, limit).map((el) => `- ${el.role} "${el.name || el.text}"${el.editable ? " [editable]" : ""}${el.disabled ? " [disabled]" : ""} => ${el.cssPath}`);
+  const rows = report.elements.slice(0, limit).map((el) => `- [${el.ref}] ${el.role} "${el.name || el.text}"${el.editable ? " [editable]" : ""}${el.disabled ? " [disabled]" : ""} => ${el.cssPath}`);
   return [`${report.url} — "${report.title}" (${report.elements.length} visible controls)`, ...rows].join("\n");
 }

@@ -12,6 +12,26 @@ export type RetryPolicy = z.infer<typeof retryPolicySchema>;
 // A "target" describes how to locate an element. All fields are optional and
 // tried in priority order by the selector resolver (see packages/browser).
 export const selectorTargetSchema = z.object({
+  /**
+   * Exact handle for an element the agent was just shown in a page snapshot
+   * (`e12`). Stamped onto the real DOM node at snapshot time, so it identifies
+   * that node and no other — no re-derivation, no ambiguity, no "there were
+   * three buttons with this name". Tried before every other strategy; if the
+   * element is gone the resolver falls through to the semantic hints below and
+   * reports the ref as stale rather than binding to the wrong element.
+   */
+  ref: z.string().regex(/^e\d+$/).optional(),
+  /**
+   * CSS path of the iframe the element lives in, when it is not in the main
+   * frame. Produced by the snapshot; the resolver scopes every strategy to it.
+   */
+  frame: z.string().optional(),
+  /**
+   * What the caller believes this element is. Never used to find it — it is
+   * recorded on the execution step, and given to the vision fallback as the
+   * description to look for when every deterministic strategy has failed.
+   */
+  elementDescription: z.string().max(200).optional(),
   css: z.string().optional(),
   xpath: z.string().optional(),
   role: z.string().optional(),
@@ -20,7 +40,6 @@ export const selectorTargetSchema = z.object({
   nearbyText: z.string().optional(),
   testId: z.string().optional(),
   nth: z.number().int().min(0).optional(),
-  frame: z.string().optional(),
   /**
    * Only ever bind to elements that are actually visible. Defaults to true.
    * Without this a union selector like "textarea, [contenteditable]" binds to
@@ -86,6 +105,16 @@ export const nodeConfigSchema = z
     errorMessage: z.string().optional(),
     scrollDirection: z.enum(["up", "down", "top", "bottom"]).optional(),
     tabIndex: z.number().int().optional(),
+    // WAIT_FOR_TEXT
+    text: z.string().optional(),
+    /** Wait for the text to DISAPPEAR rather than appear (spinners, "Saving..."). */
+    absent: z.boolean().optional(),
+    /**
+     * After a mutating action, wait for the page to stop changing before the
+     * next observation. Defaults to on; `settle: false` opts a node out.
+     */
+    settle: z.boolean().optional(),
+    settleMs: z.number().int().min(0).max(30_000).optional(),
     // PROBE_PAGE / WAIT_FOR_STATE / FLOW_NAVIGATE
     states: z.array(z.string()).optional(),
     failStates: z.array(z.string()).optional(),
@@ -93,6 +122,7 @@ export const nodeConfigSchema = z
     pollMs: z.number().int().min(100).optional(),
     maxSteps: z.number().int().min(1).max(50).optional(),
     maxElements: z.number().int().min(1).max(500).optional(),
+    maxTextLength: z.number().int().min(100).max(50_000).optional(),
     screenshotName: z.string().optional(),
     screenshot: z.boolean().optional(),
     requireNewVideo: z.boolean().optional(),

@@ -18,11 +18,18 @@ function fakeLocator(succeeds: boolean, extra: Record<string, unknown> = {}) {
   return locator;
 }
 
-/** Builds a fake Playwright Page where each strategy either resolves or times out per `succeedsAt`. */
+/**
+ * Builds a fake Playwright Page where each strategy either resolves or times
+ * out per `succeedsAt`. `locator()` is shared by the ref and css strategies —
+ * they are told apart by the selector string, the same way the real page does.
+ */
 function fakePage(succeedsAt: Set<string>, overrides: Record<string, unknown> = {}): Page {
   return {
     getByTestId: () => fakeLocator(succeedsAt.has("css-testid")),
-    locator: () => fakeLocator(succeedsAt.has("css")),
+    locator: (selector: string) =>
+      selector.startsWith("[data-bos-ref=")
+        ? fakeLocator(succeedsAt.has("ref"))
+        : fakeLocator(succeedsAt.has("css")),
     getByRole: () => fakeLocator(succeedsAt.has("role")),
     getByText: () => fakeLocator(succeedsAt.has("text")),
     getByLabel: () => fakeLocator(succeedsAt.has("aria-label")),
@@ -139,5 +146,75 @@ describe("resolveTarget element eligibility", () => {
     });
     await resolveTarget(page, { css: ".x", role: "button", preferSemantic: true }, { timeout: 20 });
     expect(order[0]).toBe("role");
+  });
+});
+
+describe("ref-first resolution", () => {
+  it("binds the ref before trying anything else", async () => {
+    // Every strategy would succeed here; the point is which one is used. The
+    // ref is the only one that cannot bind to a different element than the one
+    // the agent was shown.
+    const page = fakePage(new Set(["ref", "css", "role", "text", "aria-label"]));
+    const { strategy } = await resolveTarget(
+      page,
+      { ref: "e12", role: "button", text: "Continue", css: ".btn" },
+      { timeout: 50 }
+    );
+    expect(strategy).toBe("ref");
+  });
+
+  it("selects by the ref attribute stamped during the snapshot", async () => {
+    const selectors: string[] = [];
+    const page = fakePage(new Set(["ref"]), {
+      locator: (selector: string) => {
+        selectors.push(selector);
+        return fakeLocator(true);
+      },
+    });
+    await resolveTarget(page, { ref: "e3" }, { timeout: 50 });
+    expect(selectors).toContain('[data-bos-ref="e3"]');
+  });
+
+  it("recovers through the semantic hints when the ref has gone stale", async () => {
+    const page = fakePage(new Set(["role"]));
+    const { strategy } = await resolveTarget(
+      page,
+      { ref: "e12", role: "button", text: "Continue", preferSemantic: true },
+      { timeout: 100 }
+    );
+    expect(strategy).toBe("role");
+  });
+
+  it("says the ref is stale, and how to recover, when nothing resolves", async () => {
+    const page = fakePage(new Set());
+    await expect(resolveTarget(page, { ref: "e12", css: ".btn" }, { timeout: 50 })).rejects.toThrow(
+      /Element ref "e12" is stale.*fresh snapshot/s
+    );
+  });
+
+  it("does not claim staleness when no ref was given", async () => {
+    const page = fakePage(new Set());
+    await expect(resolveTarget(page, { css: ".btn" }, { timeout: 50 })).rejects.toThrow(
+      /Could not resolve element target(?!.*stale)/s
+    );
+  });
+
+  it("scopes every strategy to the frame the element was found in", async () => {
+    const frames: string[] = [];
+    const page = fakePage(new Set(), {
+      frameLocator: (selector: string) => {
+        frames.push(selector);
+        return {
+          locator: () => fakeLocator(true),
+          getByRole: () => fakeLocator(false),
+          getByText: () => fakeLocator(false),
+          getByLabel: () => fakeLocator(false),
+          getByTestId: () => fakeLocator(false),
+        };
+      },
+    });
+    const { strategy } = await resolveTarget(page, { ref: "e5", frame: "iframe#pay" }, { timeout: 50 });
+    expect(frames).toEqual(["iframe#pay"]);
+    expect(strategy).toBe("ref");
   });
 });

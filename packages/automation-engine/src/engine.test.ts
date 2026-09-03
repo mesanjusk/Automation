@@ -128,6 +128,65 @@ describe("WorkflowEngine", () => {
     expect(stepCompletions[0]).toMatchObject({ status: "SUCCESS", selectorStrategyUsed: "text" });
   });
 
+  describe("AI_DECISION resilience", () => {
+    const missionDefinition = () =>
+      workflowDefinitionSchema.parse({
+        startNodeId: "agent",
+        nodes: [
+          { id: "agent", type: "AI_DECISION", name: "Adaptive browser agent", config: { prompt: "Make the video" }, next: "end" },
+          { id: "end", type: "END", name: "Done", config: {} },
+        ],
+      });
+
+    it("re-observes and carries on when the brain fails to produce a decision", async () => {
+      const decideNextAiAction = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("page.waitForTimeout: Target page, context or browser has been closed"))
+        .mockResolvedValueOnce({ tool: "task_complete", reason: "clip rendered and downloaded" });
+      const hooks = makeHooks({ decideNextAiAction });
+      const definition = missionDefinition();
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks, options: {}, downloadDir: "/tmp" });
+
+      const result = await engine.run(definition.startNodeId);
+
+      expect(result.status).toBe("completed");
+      expect(decideNextAiAction).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells the brain what went wrong on the next observation", async () => {
+      // The engine hands the hook its live variables object and clears the last
+      // error on success, so the value has to be read at call time — asserting
+      // on the retained reference afterwards would only see the cleanup.
+      const errorsSeen: Array<unknown> = [];
+      const decideNextAiAction = vi.fn(async (_goal: string, variables: Record<string, unknown>) => {
+        errorsSeen.push(variables.browserAgentLastError);
+        if (errorsSeen.length === 1) throw new Error("ChatGPT brain tab closed");
+        return { tool: "task_complete", reason: "done" } as never;
+      });
+      const hooks = makeHooks({ decideNextAiAction });
+      const definition = missionDefinition();
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks, options: {}, downloadDir: "/tmp" });
+      await engine.run(definition.startNodeId);
+
+      expect(errorsSeen[0]).toBeUndefined();
+      expect(String(errorsSeen[1])).toContain("ChatGPT brain tab closed");
+    });
+
+    it("gives up as retryable — not PERMANENT — once the brain is plainly unreachable", async () => {
+      const decideNextAiAction = vi.fn().mockRejectedValue(new Error("ChatGPT is unreachable"));
+      const hooks = makeHooks({ decideNextAiAction });
+      const definition = missionDefinition();
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks, options: {}, downloadDir: "/tmp" });
+
+      const result = await engine.run(definition.startNodeId);
+
+      expect(result.status).toBe("failed");
+      expect(result.error?.category).toBe("TRANSIENT");
+      expect(result.error?.retryable).toBe(true);
+      expect(decideNextAiAction).toHaveBeenCalledTimes(5);
+    });
+  });
+
   it("stops immediately when shouldCancel() reports the task was cancelled", async () => {
     const hooks = makeHooks({ shouldCancel: vi.fn().mockResolvedValue(true) });
     const definition = workflowDefinitionSchema.parse({

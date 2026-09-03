@@ -38,10 +38,33 @@ export class BrowserSession {
 
   private constructor(context: BrowserContext, initialPage: Page) {
     this.context = context;
-    this.tabs = [initialPage];
-    context.on("page", (page) => {
-      if (!this.tabs.includes(page)) this.tabs.push(page);
-    });
+    this.tabs = [];
+    this.track(initialPage);
+    context.on("page", (page) => this.track(page));
+  }
+
+  /**
+   * Tracks a tab and forgets it the moment it closes.
+   *
+   * A tab can go away without anyone calling closeTab(): the site closes its
+   * own popup, or Chrome kills a crashed renderer. Left in `tabs`, that dead
+   * Page stays reachable through activePage and switchTab, and every later
+   * action against it fails with "Target page, context or browser has been
+   * closed" instead of falling through to a tab that is still alive.
+   */
+  private track(page: Page): void {
+    if (this.tabs.includes(page)) return;
+    this.tabs.push(page);
+    page.once("close", () => this.forget(page));
+  }
+
+  /** Idempotent: the close event and closeTab() both land here. */
+  private forget(page: Page): void {
+    const index = this.tabs.indexOf(page);
+    if (index < 0) return;
+    this.tabs.splice(index, 1);
+    if (this.activeTabIndex > index) this.activeTabIndex -= 1;
+    if (this.activeTabIndex >= this.tabs.length) this.activeTabIndex = Math.max(0, this.tabs.length - 1);
   }
 
   static async launch(profile: ProfileOptions): Promise<BrowserSession> {
@@ -60,6 +83,10 @@ export class BrowserSession {
   }
 
   get activePage(): Page {
+    // Playwright delivers 'close' asynchronously, so a tab can already be dead
+    // by the time someone asks for it. Drop those now rather than handing back
+    // a Page whose every method throws.
+    for (const dead of this.tabs.filter((page) => page.isClosed())) this.forget(dead);
     const page = this.tabs[this.activeTabIndex];
     if (!page) throw new Error("No active browser tab");
     return page;
@@ -67,7 +94,7 @@ export class BrowserSession {
 
   async newTab(url?: string): Promise<Page> {
     const page = await this.context.newPage();
-    if (!this.tabs.includes(page)) this.tabs.push(page);
+    this.track(page);
     this.activeTabIndex = this.tabs.indexOf(page);
     if (url) await page.goto(url, { waitUntil: "domcontentloaded" });
     return page;
@@ -86,7 +113,7 @@ export class BrowserSession {
     const page = this.tabs[i];
     if (!page) return;
     await page.close();
-    this.tabs.splice(i, 1);
+    this.forget(page);
     if (this.tabs.length === 0) {
       await this.newTab();
     } else {

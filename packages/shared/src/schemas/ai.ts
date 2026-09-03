@@ -11,6 +11,14 @@ export const agentTargetSchema = z.object({
   ariaLabel: z.string().optional(),
   testId: z.string().optional(),
   xpath: z.string().optional(),
+  // Locator hints, not new capabilities: they only change which of the
+  // strategies above the resolver tries first and which match it binds to.
+  /** Index into the match set, for pages that render the same control per row. */
+  nth: z.number().int().min(0).max(200).optional(),
+  /** Try role/text/aria-label before raw CSS. */
+  preferSemantic: z.boolean().optional(),
+  /** Additionally require the element to be editable. */
+  editable: z.boolean().optional(),
 });
 export type AgentTarget = z.infer<typeof agentTargetSchema>;
 

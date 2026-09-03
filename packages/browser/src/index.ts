@@ -4,5 +4,7 @@ export * from "./actions";
 export * from "./interpolate";
 export * from "./pageSnapshot";
 export * from "./pageProbe";
+export * from "./pageStability";
+export * from "./agentSnapshot";
 export * from "./flowState";
 export * from "./flowNavigator";

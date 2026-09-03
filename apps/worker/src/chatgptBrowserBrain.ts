@@ -1,7 +1,15 @@
 import type { Page } from "playwright";
 import { AIRequest } from "@bos/database";
-import { agentActionSchema, type AgentAction, type SelectorTarget } from "@bos/shared";
-import { probePage, type BrowserSession, type PageProbeReport, type ProbedElement } from "@bos/browser";
+import { agentActionSchema, type AgentAction } from "@bos/shared";
+import {
+  captureAgentSnapshot,
+  describeChanges,
+  renderOutline,
+  targetForElement,
+  type BrowserSession,
+  type PageProbeReport,
+  type ProbedElement,
+} from "@bos/browser";
 
 const CHATGPT_COMPOSER = "#prompt-textarea:visible, textarea:visible, div[contenteditable='true'][role='textbox']:visible, div[contenteditable='true'][data-lexical-editor='true']:visible";
 
@@ -32,21 +40,24 @@ function compactMission(variables: Record<string, unknown>): string {
   }
 }
 
+/**
+ * The element ids the brain is shown ARE the refs stamped on the live DOM, so
+ * "click e7" resolves to that exact node rather than to whatever currently
+ * matches a description of it.
+ */
 function controlRows(report: PageProbeReport): Array<{ id: string; el: ProbedElement }> {
-  return report.elements.slice(0, 100).map((el, index) => ({ id: `e${index + 1}`, el }));
+  return report.elements.slice(0, 100).map((el) => ({ id: el.ref, el }));
 }
 
-function observationText(report: PageProbeReport, rows: Array<{ id: string; el: ProbedElement }>): string {
-  const controls = rows.map(({ id, el }) => {
-    const flags = [el.editable ? "editable" : "", el.disabled ? "disabled" : "", el.inViewport ? "in-view" : "off-view"].filter(Boolean).join(",");
-    return `${id} | role=${el.role || "generic"} | tag=${el.tag} | name=${JSON.stringify(el.name || el.text || "")} | ${flags || "normal"}`;
-  });
+function observationText(report: PageProbeReport, notices: string[], changed: string): string {
   return [
     `URL: ${report.url}`,
     `TITLE: ${report.title}`,
     `MEDIA: videos=${report.media.videos}, playable=${report.media.playableVideos}, progressBars=${report.media.progressBars}`,
-    "VISIBLE CONTROLS:",
-    controls.join("\n") || "(none discovered)",
+    `WHAT CHANGED SINCE YOUR LAST ACTION: ${changed}`,
+    notices.length ? `NOTICES:\n${notices.map((n) => `! ${n}`).join("\n")}` : "NOTICES: (none)",
+    "VISIBLE CONTROLS (act on these by id):",
+    renderOutline(report, 100),
     "VISIBLE PAGE TEXT:",
     report.visibleText.slice(0, 4500),
   ].join("\n");
@@ -57,7 +68,8 @@ function protocolPrompt(
   variables: Record<string, unknown>,
   previousActions: AgentAction[],
   report: PageProbeReport,
-  rows: Array<{ id: string; el: ProbedElement }>,
+  notices: string[],
+  changed: string,
   includeMission: boolean
 ): string {
   const lastError = variables.browserAgentLastError ? String(variables.browserAgentLastError) : "none";
@@ -77,7 +89,7 @@ function protocolPrompt(
     ...(includeMission ? ["", "VIDEO MISSION:", compactMission(variables)] : []),
     "",
     "CURRENT GOOGLE FLOW OBSERVATION:",
-    observationText(report, rows),
+    observationText(report, notices, changed),
     "",
     "RECENT ACTIONS:",
     recent,
@@ -99,7 +111,8 @@ function protocolPrompt(
     '{"action":"done","reason":"mission completion evidence"}',
     '{"action":"fail","reason":"manual login or unrecoverable blocker"}',
     "",
-    "Prefer elementId when the control is listed. If an obvious clickable label appears only in VISIBLE PAGE TEXT, targetText may be used.",
+    "ALWAYS prefer elementId — the ids in the observation are handles on the real elements, so they cannot resolve to the wrong control. Use targetText only when an obvious clickable label appears in VISIBLE PAGE TEXT but in no listed control.",
+    "Only use ids from the CURRENT observation. If WHAT CHANGED says nothing changed, your last action did not work: do not repeat it, look for a different control.",
     "For typing, use the exact shot prompt/voiceover/requirements from the mission already provided; do not invent a different project.",
   ].join("\n");
 }
@@ -182,58 +195,6 @@ function parseDecision(raw: string): BrainDecision {
   return parsed;
 }
 
-/** Roles with no matching power — every plain div on the page is "generic". */
-const UNSELECTABLE_ROLES = new Set(["", "generic", "none", "presentation"]);
-
-function handleFor(el: ProbedElement): { role?: string; name: string } {
-  return {
-    role: UNSELECTABLE_ROLES.has(el.role) ? undefined : el.role,
-    name: (el.name || el.text || "").trim(),
-  };
-}
-
-/**
- * Describes a probed element the way a person would find it again.
- *
- * `cssPath` is a positional fallback: up to twelve levels of
- * `div:nth-child(n)` generated from wherever the element sat at probe time.
- * Flow re-renders between the observation and the click, so that path
- * routinely points at nothing a second later — which is how a click on a
- * listed, visible button still fails to resolve. The element's role and
- * accessible name survive those re-renders, so they lead and the path only
- * backs them up.
- */
-export function targetForElement(el: ProbedElement, all: ProbedElement[]): SelectorTarget {
-  const { role, name } = handleFor(el);
-  const target: SelectorTarget = { preferSemantic: true };
-  if (role) target.role = role;
-  if (name) target.text = name;
-  if (el.ariaLabel) target.ariaLabel = el.ariaLabel;
-  if (el.editable) target.editable = true;
-
-  const twins =
-    role || name
-      ? all.filter((candidate) => {
-          const other = handleFor(candidate);
-          return other.role === role && other.name === name;
-        })
-      : [];
-
-  if (twins.length > 1) {
-    // Flow renders one identical control per clip card, so the name alone is
-    // not a handle. `nth` indexes into a strategy's match set — the probe walks
-    // visible elements in DOM order, the same order Playwright indexes — so it
-    // only means something for strategies that match many elements. A unique
-    // cssPath asked for nth(3) resolves to nothing, so it is left off here.
-    target.nth = twins.indexOf(el);
-    return target;
-  }
-
-  if (el.testId) target.testId = el.testId;
-  target.css = el.cssPath;
-  return target;
-}
-
 function targetFor(
   decision: BrainDecision,
   rows: Array<{ id: string; el: ProbedElement }>,
@@ -241,7 +202,12 @@ function targetFor(
 ): AgentAction["target"] | undefined {
   if (decision.elementId) {
     const row = rows.find((candidate) => candidate.id === decision.elementId);
-    if (!row) throw new Error(`Browser brain selected stale/unknown element ${decision.elementId}`);
+    if (!row) {
+      throw new Error(
+        `Browser brain selected element "${decision.elementId}", which is not in the current observation. ` +
+          `Available ids: ${rows.slice(0, 25).map((candidate) => candidate.id).join(", ")}.`
+      );
+    }
     return targetForElement(row.el, all);
   }
   if (decision.targetText) return { text: decision.targetText, preferSemantic: true };
@@ -278,6 +244,7 @@ export function buildChatGptWebDecisionHook(taskId: string, session: BrowserSess
   let brainPage: Page | null = null;
   let observationNumber = 0;
   let brainInitialized = false;
+  let previousReport: PageProbeReport | undefined;
 
   function focusTab(page: Page, label: string): void {
     const index = session.tabs.indexOf(page);
@@ -297,7 +264,13 @@ export function buildChatGptWebDecisionHook(taskId: string, session: BrowserSess
 
   return async (goal: string, variables: Record<string, unknown>, previousActions: AgentAction[]): Promise<AgentAction> => {
     const flowPage = session.activePage;
-    const report = await probePage(flowPage, { maxElements: 120, maxTextLength: 6000 });
+    // Settle first: an observation taken while Flow is still re-rendering
+    // describes a page that no longer exists by the time the brain answers.
+    const snapshot = await captureAgentSnapshot(flowPage, { maxElements: 120, maxTextLength: 6000 });
+    const report = snapshot.report;
+    const notices = snapshot.page.notices ?? [];
+    const changed = describeChanges(previousReport, report);
+    previousReport = report;
     const rows = controlRows(report);
     observationNumber += 1;
     variables.browserAgentStep = observationNumber;
@@ -305,6 +278,8 @@ export function buildChatGptWebDecisionHook(taskId: string, session: BrowserSess
       url: report.url,
       title: report.title,
       media: report.media,
+      changed,
+      notices,
       controls: rows.slice(0, 40).map(({ id, el }) => ({ id, role: el.role, name: el.name || el.text, editable: el.editable, disabled: el.disabled })),
     };
 
@@ -324,8 +299,8 @@ export function buildChatGptWebDecisionHook(taskId: string, session: BrowserSess
     try {
       // A reopened tab is a brand-new conversation holding none of the prior
       // turns, so every retry restates the mission.
-      const prompt = protocolPrompt(goal, variables, previousActions, report, rows, !brainInitialized);
-      const restated = protocolPrompt(goal, variables, previousActions, report, rows, true);
+      const prompt = protocolPrompt(goal, variables, previousActions, report, notices, changed, !brainInitialized);
+      const restated = protocolPrompt(goal, variables, previousActions, report, notices, changed, true);
 
       // Reopening the brain tab costs one round trip. Letting the closure
       // escape costs the whole mission: a raw Playwright error out of this

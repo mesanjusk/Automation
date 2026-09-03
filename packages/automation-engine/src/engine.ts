@@ -2,7 +2,7 @@ import { executeBrowserAction, BROWSER_NODE_TYPES } from "@bos/browser";
 import { AutomationError, type AgentAction, type WorkflowNode } from "@bos/shared";
 import { evaluateCondition, resolveVariablePath } from "./condition";
 import { withRetry } from "./retry";
-import { agentActionToWorkflowNode } from "./aiActionAdapter";
+import { actionSignature, agentActionToWorkflowNode, isTerminalTool } from "./aiActionAdapter";
 import { findNode, type EngineRunContext, type EngineRunResult } from "./types";
 
 const BROWSER_NODE_TYPE_SET = new Set(BROWSER_NODE_TYPES);
@@ -11,6 +11,21 @@ interface RunState {
   variables: Record<string, unknown>;
   aiActionsSoFar: number;
   aiPreviousActions: AgentAction[];
+}
+
+/** Identical consecutive agent actions tolerated before the run is stopped. */
+const MAX_IDENTICAL_ACTIONS = 4;
+
+/**
+ * Recognised by shape rather than by class, so the engine keeps its
+ * independence from the AI package (which is where the violation is raised).
+ */
+function isTerminalSafetyViolation(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.name === "AgentSafetyViolation" &&
+    (err as Error & { terminal?: boolean }).terminal === true
+  );
 }
 
 export class WorkflowEngine {
@@ -245,6 +260,12 @@ export class WorkflowEngine {
     const maxActions = this.ctx.options.maxAiActions ?? 100;
     const goal = node.config.prompt ?? node.name;
     let consecutiveActionFailures = 0;
+    // An agent that cannot tell its click did nothing will happily click the
+    // same dead control until its whole budget is gone. Identical consecutive
+    // actions are the observable signature of that, so they are counted and
+    // eventually stopped with an error that names the action it was stuck on.
+    let lastSignature = "";
+    let repeatCount = 0;
 
     for (;;) {
       if (state.aiActionsSoFar >= maxActions) {
@@ -264,15 +285,28 @@ export class WorkflowEngine {
       try {
         action = await this.ctx.hooks.decideNextAiAction(goal, state.variables, state.aiPreviousActions);
       } catch (err) {
-        // Getting a decision can fail for reasons that have nothing to do with
-        // the mission — the model's tab closed, it replied with prose. That is
-        // worth one observation, not the whole run, so it draws on the same
-        // budget a failed browser action does and the loop re-observes.
-        // Without this the raw error escapes unclassified and the engine files
-        // it as PERMANENT, ending a long video mission on a single hiccup.
+        // A boundary the agent is not allowed to cross (the domain allowlist,
+        // the action budget) is not a hiccup to re-observe past: re-asking
+        // cannot make it acceptable, and retrying only spends the budget again.
+        if (isTerminalSafetyViolation(err)) {
+          throw new AutomationError({
+            errorCode: "AI_SAFETY_VIOLATION",
+            message: (err as Error).message,
+            category: "PERMANENT",
+            retryable: false,
+            stepId: node.id,
+          });
+        }
+        // Otherwise: getting a decision can fail for reasons that have nothing
+        // to do with the mission — the model's tab closed, it replied with
+        // prose. That is worth one observation, not the whole run, so it draws
+        // on the same budget a failed browser action does and the loop
+        // re-observes. Without this the raw error escapes unclassified and the
+        // engine files it as PERMANENT, ending a long mission on one hiccup.
         consecutiveActionFailures += 1;
         const message = (err as Error).message;
         state.variables.browserAgentLastError = `Could not obtain the next decision: ${message}`;
+        state.variables.browserAgentLastAction = { tool: "(decision)", status: "failed", detail: message };
         this.ctx.hooks.log?.(`Adaptive browser decision failed (${consecutiveActionFailures}/5): ${message}. Re-observing.`);
         await this.ctx.hooks.onStepComplete({
           stepId: `${node.id}:decision:${state.aiActionsSoFar + consecutiveActionFailures}`,
@@ -296,9 +330,34 @@ export class WorkflowEngine {
       state.aiActionsSoFar += 1;
       state.aiPreviousActions.push(action);
 
+      const signature = actionSignature(action);
+      if (signature === lastSignature && !isTerminalTool(action.tool)) {
+        repeatCount += 1;
+        if (repeatCount >= MAX_IDENTICAL_ACTIONS) {
+          throw new AutomationError({
+            errorCode: "AI_REPEATED_ACTION_LOOP",
+            message:
+              `AI agent repeated the same action ${repeatCount + 1} times without making progress: ` +
+              `${action.tool} (${action.reason}). The page is not responding to it.`,
+            category: "WEBSITE_CHANGED",
+            retryable: false,
+            stepId: node.id,
+          });
+        }
+        state.variables.browserAgentRepeatWarning =
+          `You have now issued this identical action ${repeatCount + 1} times and the page has not responded. ` +
+          `Stop repeating it — observe the page again and choose a different approach.`;
+      } else {
+        repeatCount = 0;
+        lastSignature = signature;
+        delete state.variables.browserAgentRepeatWarning;
+      }
+
       if (action.tool === "task_complete") {
         state.variables.browserAgentResult = { status: "completed", reason: action.reason, actions: state.aiActionsSoFar };
         delete state.variables.browserAgentLastError;
+        delete state.variables.browserAgentLastAction;
+        delete state.variables.browserAgentRepeatWarning;
         return;
       }
       if (action.tool === "task_fail") {
@@ -323,6 +382,13 @@ export class WorkflowEngine {
         });
         consecutiveActionFailures = 0;
         delete state.variables.browserAgentLastError;
+        // The next observation is taken by the decision hook, which needs to
+        // know what the agent just did in order to report what changed.
+        state.variables.browserAgentLastAction = {
+          tool: action.tool,
+          status: "success",
+          expectation: action.expectation,
+        };
         if (action.resultVariable && result.output !== undefined) {
           state.variables[action.resultVariable] = result.output;
         }
@@ -343,6 +409,12 @@ export class WorkflowEngine {
         consecutiveActionFailures += 1;
         const message = (err as Error).message;
         state.variables.browserAgentLastError = message;
+        state.variables.browserAgentLastAction = {
+          tool: action.tool,
+          status: "failed",
+          detail: message,
+          expectation: action.expectation,
+        };
         this.ctx.hooks.log?.(`Adaptive browser action failed (${consecutiveActionFailures}/5): ${message}. Re-observing and replanning.`);
         await this.ctx.hooks.onStepComplete({
           stepId: syntheticNode.id,

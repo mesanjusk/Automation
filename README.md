@@ -60,10 +60,10 @@ your own Docker host). They only share MongoDB and Redis.
 ## Core concepts
 
 - **Workflow** — a graph of typed nodes (`NAVIGATE`, `CLICK`, `TYPE`,
-  `EXTRACT_TEXT`, `PROBE_PAGE`, `WAIT_FOR_STATE`, `FLOW_NAVIGATE`,
-  `CONDITION`, `LOOP`, `FOR_EACH`, `AI_DECISION`, `HUMAN_APPROVAL`,
-  `WEBHOOK`, …). Versioned — saving never overwrites a
-  published version, it creates a new one.
+  `EXTRACT_TEXT`, `WAIT_FOR_TEXT`, `SCROLL_TO_ELEMENT`, `PROBE_PAGE`,
+  `WAIT_FOR_STATE`, `FLOW_NAVIGATE`, `CONDITION`, `LOOP`, `FOR_EACH`,
+  `AI_DECISION`, `HUMAN_APPROVAL`, `WEBHOOK`, …). Versioned — saving never
+  overwrites a published version, it creates a new one.
 - **Automation** — a named, API-triggerable wrapper around a published
   workflow (+ default browser profile / callback URL / schedule).
 - **Task** — one run of an automation. Goes through
@@ -82,18 +82,40 @@ your own Docker host). They only share MongoDB and Redis.
   (`browser_click`, `browser_type`, …). It cannot execute arbitrary code. Every
   action is schema-validated before it touches the browser, capped by
   `MAX_AI_ACTIONS`, and optionally restricted to a domain allowlist.
+- **Element refs** — the accuracy mechanism. Every snapshot stamps a handle
+  (`data-bos-ref="e12"`) on each visible control and shows the agent
+  `[e12] button "Continue"`. The agent then acts on `e12`, so there is no lossy
+  round trip from "the element I was shown" through a description and back to
+  "an element matching that description" — the classic source of an agent
+  clicking the wrong one of five identical buttons. Refs live on the node, so
+  they survive a re-render that moves the element, and a ref that has genuinely
+  gone fails fast and says so instead of resolving to something else.
+- **Observe → act → verify** — after every mutating action the executor waits
+  for the DOM to stop changing, and the next observation is handed to the agent
+  together with a diff of what actually changed ("URL changed…", "Submit is now
+  enabled", or "NOTHING CHANGED — your last action had no visible effect").
+  Without that feedback a model cannot tell a click that worked from one that
+  hit a disabled control, and it builds its next steps on an action that never
+  happened. The engine also stops an agent that issues the same action four
+  times running.
 - **Self-healing selectors** — each element target tries, in order:
-  `data-testid` → CSS → role → text → aria-label → nearby text → XPath →
+  `ref` → `data-testid` → CSS → role → text → aria-label → nearby text → XPath →
   AI visual identification (Gemini vision, coordinates only as a last
   resort). Whichever strategy actually worked is recorded on the execution
   step. Matches are restricted to elements that are actually visible (set
   `visibleOnly: false` to opt out), `editable: true` skips past read-only
   look-alikes, and `preferSemantic: true` tries role/text/aria before CSS.
-- **Live page discovery** — `PROBE_PAGE` inspects the real DOM and reports
-  every visible control with its role, accessible name, aria-label,
-  editability and a generated selector. Workflows interpolate what it found
+- **Live page discovery** — `PROBE_PAGE` inspects the real DOM — including
+  same-origin iframes — and reports every visible control with its ref, role,
+  accessible name, aria-label, current value, editability and a generated
+  selector, plus open modal dialogs, live-region announcements and how far the
+  page can still scroll. Workflows interpolate what it found
   (`{{flowUi.composer.cssPath}}`) instead of hard-coding selectors for an app
   whose markup changes underneath them.
+- **Waiting on the page, not the clock** — `WAIT_FOR_TEXT` blocks until the
+  site's own confirmation appears (or a spinner's text disappears), which is
+  both faster than a guessed sleep when the site is quick and correct when it
+  is slow.
 - **State-aware site drivers** — `FLOW_NAVIGATE` classifies whichever Google
   Flow screen is really on display (landing / Google sign-in / project
   workspace / generation UI / generating / clip ready / error) and advances
@@ -170,11 +192,20 @@ environments.
 npm test
 ```
 
-52 unit/integration tests cover workflow validation, the self-healing
-selector fallback chain, the retry/backoff policy, the engine's control flow
-(branching, loops, human-approval pausing, cancellation), BullMQ job
-shaping, request-schema validation for the public API, and webhook HMAC
-signing.
+198 unit/integration tests cover workflow validation, the self-healing
+selector fallback chain (including ref binding, stale-ref recovery and iframe
+scoping), page-snapshot rendering and change detection, the agent tool
+adapter and its safety checks, the agent prompt contract, the retry/backoff
+policy, the engine's control flow (branching, loops, human-approval pausing,
+cancellation, the repeated-action guard), BullMQ job shaping, request-schema
+validation for the public API, and webhook HMAC signing.
+
+Files ending `.browser.test.ts` drive a real headless Chromium: they prove the
+probe reads a real DOM correctly, that a ref survives a re-render and still
+resolves to the same element, that a removed ref fails fast, that the executor
+types into and clicks the exact elements a snapshot named, and that the
+stability wait both settles and gives up within its budget. They skip
+themselves with a warning if no Chromium is available.
 
 ### The local e2e fixture
 
@@ -294,7 +325,15 @@ page) when the task resolves.
 - API keys are stored as SHA-256 hashes, never in plaintext.
 - The AI agent only calls a fixed, schema-validated tool list — it cannot
   run arbitrary code, and every action is checked against `MAX_AI_ACTIONS`
-  and (optionally) a domain allowlist before it reaches Playwright.
+  and (optionally) a domain allowlist before it reaches Playwright. The
+  allowlist covers `browser_new_tab` as well as `browser_navigate`, and is
+  re-checked against the URL the browser is *actually* showing before each
+  decision — a click on an outbound link never calls a navigation tool, so a
+  pre-flight check alone would not hold the boundary. Crossing it ends the run;
+  a merely malformed tool call does not.
+- Snapshots stamp a `data-bos-ref` attribute on visible controls. That is the
+  only way the platform writes to a target page's DOM, and it adds nothing that
+  is submitted, transmitted or persisted by the site.
 - The platform never attempts to defeat CAPTCHA/MFA/bot-detection; any such
   wall pauses the task as `WAITING_FOR_HUMAN` for a person to resolve.
 

@@ -51,6 +51,20 @@
     const text = cleanText(el.innerText || el.textContent);
     if (text) return text;
 
+    // Check for icon or SVG buttons with no visible text (e.g. send arrow buttons)
+    if (el.tagName === "BUTTON" || el.getAttribute("role") === "button") {
+      const svg = el.querySelector("svg");
+      if (svg) {
+        const svgAria = svg.getAttribute("aria-label") || svg.getAttribute("title");
+        if (svgAria) return cleanText(svgAria);
+        const allAttrs = `${el.className || ""} ${el.id || ""} ${svg.getAttribute("class") || ""}`;
+        if (/send|submit|arrow|enter|generate|forward/i.test(allAttrs)) {
+          return "Submit / Send button";
+        }
+        return "Action button";
+      }
+    }
+
     return "";
   }
 

@@ -121,16 +121,19 @@
         code: keyName === "Enter" ? "Enter" : keyName,
         keyCode: keyName === "Enter" ? 13 : 0,
         which: keyName === "Enter" ? 13 : 0,
+        charCode: keyName === "Enter" ? 13 : 0,
         bubbles: true,
-        cancelable: true
+        cancelable: true,
+        composed: true,
+        view: window
       };
 
       activeEl.dispatchEvent(new KeyboardEvent("keydown", eventInit));
       activeEl.dispatchEvent(new KeyboardEvent("keypress", eventInit));
       activeEl.dispatchEvent(new KeyboardEvent("keyup", eventInit));
 
-      // If pressing Enter in a form/input, optionally submit the form
-      if (keyName === "Enter" && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA")) {
+      // If pressing Enter in a form, input, or contenteditable prompt bar:
+      if (keyName === "Enter") {
         const form = activeEl.closest("form");
         if (form) {
           const submitBtn = form.querySelector("button[type='submit'], input[type='submit']");
@@ -138,6 +141,18 @@
             submitBtn.click();
           } else {
             form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+          }
+        } else {
+          // If in a prompt composer (like Google Flow, ChatGPT, Claude), check for a send arrow button nearby
+          const composer = activeEl.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar']") || activeEl.parentElement?.parentElement;
+          if (composer) {
+            const sendBtn = composer.querySelector("button:not([disabled]) svg, button[type='submit'], [role='button']:not([disabled])");
+            if (sendBtn) {
+              const btn = sendBtn.tagName === "svg" ? (sendBtn.closest("button") || sendBtn.closest("[role='button']")) : sendBtn;
+              if (btn && btn !== activeEl) {
+                btn.click();
+              }
+            }
           }
         }
       }

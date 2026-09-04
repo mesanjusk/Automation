@@ -287,8 +287,18 @@ RULES:
    - "press": press a keyboard key (e.g. "Enter", "Tab", "Escape"). Requires "key": "Enter". Optional "ref".
    - "navigate": navigate directly to a full URL. Requires "value": "https://...".
    - "wait": wait for asynchronous loading. Requires "value": milliseconds (e.g. 2000).
-   - "task_complete": the task is FINISHED with verified evidence. Requires "reason" (summary of what was achieved/extracted).
-   - "task_fail": blocked by CAPTCHA, MFA, payment, or impossible task. Requires "reason".
+   - "task_complete": the goal is 100% DONE and you have verified the actual result on screen. Requires "reason".
+   - "task_fail": blocked by CAPTCHA, MFA, payment, or error. Requires "reason".
+5. SUBMITTING PROMPTS & FORMS:
+   - After typing into a prompt or search box, you MUST submit it.
+   - To submit: Use {"action": "press", "ref": "<input_ref>", "key": "Enter"} to hit Enter on the input field, OR click the Send/Submit arrow button immediately adjacent to the input field. Do NOT click unrelated "Create" or "+" buttons in the top navigation bar!
+   - If the text is still sitting in the input box and no loading indicator or generation has started, it was NOT submitted! Press Enter on the input box.
+
+6. CRITICAL EVIDENCE RULE FOR task_complete:
+   - NEVER call "task_complete" based on an assumption (e.g. "I assume it is finished").
+   - NEVER call "task_complete" while a video or generation is still in progress!
+   - For media creation tasks: You must see the actual rendered video player, thumbnail, or download button before completing.
+   - If generation is in progress or waiting, use {"action": "wait", "value": 5000} to continue monitoring the page!
 
 CURRENT PAGE CONTEXT:
 URL: ${snapshot.url}

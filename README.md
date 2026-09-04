@@ -123,10 +123,20 @@ your own Docker host). They only share MongoDB and Redis.
   refuses the Google sign-in flow inside an automated browser. The fix is not to
   make automation look less automated — that is fragile, and it is the wrong
   thing to do to somebody's security check. It is to stop signing in inside
-  automation at all: `npm run chrome` starts your real Chrome with a DevTools
-  port, you sign in normally, and the run attaches to the browser you are
-  already signed in to. The session it attaches to is yours, so the worker
-  detaches at the end rather than closing your window.
+  automation at all: `npm run chrome` starts real Chrome with a DevTools port,
+  you sign in normally, and the run attaches to the browser you are already
+  signed in to. The session it attaches to is yours, so the worker detaches at
+  the end rather than closing your window.
+
+  It is a **separate Chrome window, and that is not avoidable**: a browser that
+  is already running cannot be attached to afterwards (the DevTools port only
+  exists if Chrome was started with `--remote-debugging-port`), and Chrome 136+
+  refuses that flag on your default profile, as a fix for malware reading
+  cookies through DevTools. So `npm run chrome` opens the dashboard in that
+  window too — sign in once, and work entirely in the one browser the run
+  drives. Re-running it attaches to the window you already have rather than
+  opening a second, and if Chrome was already running with that profile (so the
+  launch just handed off and quit) it says exactly that instead of timing out.
 - **Signing in stays human** — `WAIT_FOR_LOGIN` opens the sites a run needs an
   account on, then blocks *inside the run* at the worker's terminal until the
   person says they are done, and continues in that same window. This is not the

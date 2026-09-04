@@ -39,9 +39,17 @@ export async function processTaskJob(taskId: string): Promise<void> {
     // already holds the real session, and there is no blank context to seed.
     const cdpUrl = process.env.BROWSER_CDP_URL?.trim();
     if (cdpUrl) {
-      console.log(`[worker] attaching to the Chrome already running at ${cdpUrl}`);
+      console.log(`[worker] attaching to the Chrome already running at ${cdpUrl} — no new browser will be opened.`);
       session = await BrowserSession.connect(cdpUrl);
     } else {
+      // Say which browser this run is using, and how to change it. Without
+      // this the two modes are indistinguishable from the outside: a fresh
+      // window appears either way, and "why did it open a new browser?" has no
+      // answer anywhere in the logs.
+      console.log(
+        "[worker] BROWSER_CDP_URL is not set — launching a new browser for this run. " +
+          "To use a Chrome you signed in to yourself, run `npm run chrome` and set BROWSER_CDP_URL to the URL it prints."
+      );
       const storageState = profile?.encryptedStorageState ? decryptJSON(profile.encryptedStorageState) : undefined;
       session = await BrowserSession.launch({ userAgent: profile?.userAgent, viewport: profile?.viewport, locale: profile?.locale, timezone: profile?.timezone, storageState });
     }

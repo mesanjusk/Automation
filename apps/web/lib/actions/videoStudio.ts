@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { dbConnect } from "@/lib/db";
 import { Automation, Task, Workflow, WorkflowVersion } from "@bos/database";
 import { buildVideoStudioWorkflow } from "@/lib/videoStudioWorkflow";
+import { VIDEO_STUDIO_GENERATOR } from "@/lib/workflowGenerators";
 
 export async function runIdeaToFlowVideo(formData: FormData) {
   await dbConnect();
@@ -17,6 +18,9 @@ export async function runIdeaToFlowVideo(formData: FormData) {
     description: "API-free ChatGPT production planner -> adaptive ChatGPT-web browser agent -> Google Flow",
     status: "published",
     currentVersion: 1,
+    // Marks this as code-generated, so a retry rebuilds it from the current
+    // source instead of replaying the snapshot taken when the run started.
+    generator: VIDEO_STUDIO_GENERATOR,
   });
   const version = await WorkflowVersion.create({
     workflowId: workflow._id,

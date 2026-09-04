@@ -67,6 +67,14 @@ your own Docker host). They only share MongoDB and Redis.
   saving never overwrites a published version, it creates a new one.
 - **Automation** — a named, API-triggerable wrapper around a published
   workflow (+ default browser profile / callback URL / schedule).
+- **Generated workflows** — Video Studio emits its workflow from code rather
+  than from the editor, and the version stored when a run starts is only a
+  snapshot of what the generator said that day. Replaying a snapshot is right
+  for a workflow a person drew and published; it is wrong for a generated one,
+  because it pins every future retry to that day's code — which is how a bug
+  fixed and merged weeks ago comes back, with its original error message, on
+  every retry of an old task. Such workflows carry a `generator` name and are
+  rebuilt from current source on retry.
 - **Task** — one run of an automation. Goes through
   `QUEUED → STARTING → RUNNING → COMPLETED|FAILED|CANCELLED`, or
   `WAITING_FOR_HUMAN` if it hits a `HUMAN_APPROVAL` node or the AI agent
@@ -246,13 +254,14 @@ environments.
 npm test
 ```
 
-257 unit/integration tests cover workflow validation, the self-healing
+262 unit/integration tests cover workflow validation, the self-healing
 selector fallback chain (including ref binding, stale-ref recovery and iframe
 scoping), page-snapshot rendering and change detection, the agent tool
 adapter and its safety checks, the agent prompt contract, the retry/backoff
 policy, the engine's control flow (branching, loops, human-approval pausing,
 cancellation, the repeated-action guard, `PARSE_JSON` and its repairs), the
-manual sign-in gate, attaching to an already-running Chrome, the
+manual sign-in gate, attaching to an already-running Chrome, regenerating
+code-generated workflows on retry, the
 lenient JSON reader on its own, the Video Studio mission builder, BullMQ job
 shaping, request-schema validation for the public API, and webhook HMAC
 signing.

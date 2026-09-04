@@ -55,8 +55,12 @@ async function loadSettings() {
   const stored = await chrome.storage.local.get("webcopilot_settings");
   if (stored.webcopilot_settings) {
     settings = { ...DEFAULT_SETTINGS, ...stored.webcopilot_settings };
-    // Auto-migrate retired models
-    if (settings.geminiModel === "gemini-2.0-flash" || settings.geminiModel === "gemini-1.5-flash") {
+    // Auto-migrate retired models or Pro models (which have limit: 0 on free tier)
+    if (
+      settings.geminiModel === "gemini-2.0-flash" ||
+      settings.geminiModel === "gemini-1.5-flash" ||
+      settings.geminiModel?.includes("pro")
+    ) {
       settings.geminiModel = "gemini-3.6-flash";
       await chrome.storage.local.set({ webcopilot_settings: settings });
     }
@@ -352,9 +356,9 @@ async function callGemini(systemPrompt) {
   const candidateModels = [
     primaryModel,
     "gemini-3.6-flash",
+    "gemini-2.5-flash",
     "gemini-3.8-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-3.1-pro-preview"
+    "gemini-3.1-flash-lite"
   ];
   const modelsToTry = candidateModels.filter((m, idx, self) => self.indexOf(m) === idx);
 
@@ -376,10 +380,18 @@ async function callGemini(systemPrompt) {
           })
         });
 
-        if (response.status === 503 || response.status === 429) {
+        if (response.status === 429 || response.status === 503) {
           const errData = await response.json().catch(() => ({}));
           const errMsg = errData?.error?.message || `Server busy (HTTP ${response.status})`;
           lastError = new Error(errMsg);
+
+          // If this model has 0 free quota (e.g. Pro models on Free Tier), skip to next free model immediately!
+          if (errMsg.includes("limit: 0") || errMsg.includes("Quota exceeded for metric")) {
+            console.warn(`Model ${model} has no free quota (${errMsg}). Switching immediately to next free Flash model...`);
+            setStatus(`Switching to free Flash model...`, "thinking");
+            break;
+          }
+
           const delay = attempt * 2000;
           console.warn(`Model ${model} busy (${errMsg}). Retrying in ${delay / 1000}s (attempt ${attempt}/3)...`);
           setStatus(`Server busy, retrying in ${delay / 1000}s...`, "thinking");
@@ -419,8 +431,8 @@ async function callGemini(systemPrompt) {
   }
 
   const finalMessage = lastError?.message
-    ? `Google AI servers are experiencing temporary high demand: "${lastError.message}". Please wait 10-15 seconds and try again.`
-    : "Google AI servers are experiencing temporary high demand. Please wait a few seconds and try again.";
+    ? `Google AI servers: "${lastError.message}". Please ensure Settings is set to "gemini-3.6-flash" or "gemini-2.5-flash" (100% Free Tier).`
+    : "Google AI servers are experiencing high demand. Please wait a moment and try again.";
   throw new Error(finalMessage);
 }
 

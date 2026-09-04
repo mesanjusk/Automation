@@ -62,8 +62,8 @@ your own Docker host). They only share MongoDB and Redis.
 - **Workflow** — a graph of typed nodes (`NAVIGATE`, `CLICK`, `TYPE`,
   `EXTRACT_TEXT`, `WAIT_FOR_TEXT`, `SCROLL_TO_ELEMENT`, `PROBE_PAGE`,
   `WAIT_FOR_STATE`, `FLOW_NAVIGATE`, `CONDITION`, `LOOP`, `FOR_EACH`,
-  `AI_DECISION`, `HUMAN_APPROVAL`, `WEBHOOK`, …). Versioned — saving never
-  overwrites a published version, it creates a new one.
+  `PARSE_JSON`, `AI_DECISION`, `HUMAN_APPROVAL`, `WEBHOOK`, …). Versioned —
+  saving never overwrites a published version, it creates a new one.
 - **Automation** — a named, API-triggerable wrapper around a published
   workflow (+ default browser profile / callback URL / schedule).
 - **Task** — one run of an automation. Goes through
@@ -116,6 +116,16 @@ your own Docker host). They only share MongoDB and Redis.
   site's own confirmation appears (or a spinner's text disappears), which is
   both faster than a guessed sleep when the site is quick and correct when it
   is slow.
+- **Reading a model's reply** — `PARSE_JSON` takes text a workflow scraped out
+  of a page and parses it in the worker, not in a page script. It repairs what
+  is safely repairable (a markdown fence, a trailing comma, typographic quotes,
+  a raw newline, and the one that actually bites on long outputs: an unescaped
+  `"` inside a string value) and, when it cannot, reports the text *around* the
+  failure and whether the reply looks truncated — which means it was read
+  before it had finished being written, a different problem with a different
+  fix. It fails `TRANSIENT`/retryable, and with `continueOnError` a workflow can
+  branch on `<variableName>Error` and ask the model to try again instead of
+  ending the run.
 - **State-aware site drivers** — `FLOW_NAVIGATE` classifies whichever Google
   Flow screen is really on display (landing / Google sign-in / project
   workspace / generation UI / generating / clip ready / error) and advances
@@ -131,6 +141,13 @@ your own Docker host). They only share MongoDB and Redis.
   every planned clip in order with the continuity lock carried into each
   prompt. Runs with `executionTarget: "local"`, which the worker claims by
   polling MongoDB — no Redis, so cloud/Render automations are unaffected.
+  Reading the plan is split in three: a page script that only *waits* (keyed on
+  ChatGPT's own stop-streaming and copy-message controls, so a reply that pauses
+  mid-thought is not mistaken for a finished one), `PARSE_JSON`, and — if the
+  reply still will not parse — a correction round-trip that tells the planner
+  exactly what was wrong and reads its next answer. Shot prompts are composed in
+  the worker (`flowMission.ts`), so a stray character in one shot can no longer
+  take down the run.
 
 ## Local development
 
@@ -192,13 +209,15 @@ environments.
 npm test
 ```
 
-198 unit/integration tests cover workflow validation, the self-healing
+246 unit/integration tests cover workflow validation, the self-healing
 selector fallback chain (including ref binding, stale-ref recovery and iframe
 scoping), page-snapshot rendering and change detection, the agent tool
 adapter and its safety checks, the agent prompt contract, the retry/backoff
 policy, the engine's control flow (branching, loops, human-approval pausing,
-cancellation, the repeated-action guard), BullMQ job shaping, request-schema
-validation for the public API, and webhook HMAC signing.
+cancellation, the repeated-action guard, `PARSE_JSON` and its repairs), the
+lenient JSON reader on its own, the Video Studio mission builder, BullMQ job
+shaping, request-schema validation for the public API, and webhook HMAC
+signing.
 
 Files ending `.browser.test.ts` drive a real headless Chromium: they prove the
 probe reads a real DOM correctly, that a ref survives a re-render and still

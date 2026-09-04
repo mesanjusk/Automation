@@ -105,6 +105,11 @@ export const nodeConfigSchema = z
     errorMessage: z.string().optional(),
     scrollDirection: z.enum(["up", "down", "top", "bottom"]).optional(),
     tabIndex: z.number().int().optional(),
+    // PARSE_JSON
+    /** Dotted path of the variable holding the text to parse ("planReply.result.text"). */
+    sourceVariable: z.string().optional(),
+    /** Dotted paths that must exist and be non-empty in the parsed value, or the parse counts as failed. */
+    require: z.array(z.string()).optional(),
     // WAIT_FOR_TEXT
     text: z.string().optional(),
     /** Wait for the text to DISAPPEAR rather than appear (spinners, "Saving..."). */

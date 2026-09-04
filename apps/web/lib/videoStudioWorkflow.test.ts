@@ -53,12 +53,73 @@ describe("Video Studio workflow definition", () => {
 
   it("plans with ChatGPT before it touches Flow, and keeps the plan in a variable", () => {
     expect(byId.get("open_chatgpt")?.type).toBe("NAVIGATE");
-    const collect = byId.get("collect_flow_plan");
-    expect(collect?.type).toBe("EXECUTE_JS");
-    expect(collect?.config.variableName).toBe("flowPlan");
+    expect(byId.get("collect_plan_reply")?.type).toBe("EXECUTE_JS");
+    expect(byId.get("parse_plan")?.config.variableName).toBe("flowPlan");
     // The Flow agent's brief has to reference the plan or the two halves are
     // not actually connected.
     expect(String(byId.get("flow_browser_agent")?.config.prompt)).toContain("flowPlan");
+  });
+
+  it("reads the planner's reply and parses it as two separate steps", () => {
+    // The read cannot fail on the shape of the answer and the parse cannot
+    // fail on the speed of it, so each failure names its own cause.
+    const read = byId.get("collect_plan_reply");
+    expect(read?.type).toBe("EXECUTE_JS");
+    expect(read?.config.variableName).toBe("planReply");
+    // The page script only waits and returns text — no parsing in the page.
+    expect(String(read?.config.script)).not.toContain("JSON.parse");
+
+    const parse = byId.get("parse_plan");
+    expect(parse?.type).toBe("PARSE_JSON");
+    expect(parse?.config.sourceVariable).toBe("planReply.result.text");
+    expect(parse?.config.require).toEqual(["shots"]);
+  });
+
+  it("waits on the planner's own completion signals, not on a fixed sleep", () => {
+    // Text stability alone is satisfied every time a streamed reply pauses to
+    // think, which is how a half-written plan got read as a finished one.
+    const script = String(byId.get("collect_plan_reply")?.config.script);
+    expect(script).toContain("stop-button");
+    expect(script).toContain("copy-turn-action-button");
+    expect(byId.get("collect_plan_reply")?.timeout).toBeGreaterThan(600_000);
+  });
+
+  it("asks the planner to fix a malformed reply instead of ending the run", () => {
+    const branch = byId.get("plan_ready");
+    expect(branch?.type).toBe("CONDITION");
+    expect(branch?.config.condition).toMatchObject({ left: "flowPlan", operator: "exists" });
+    expect(branch?.config.trueNodeId).toBe("capture_plan");
+    expect(branch?.config.falseNodeId).toBe("request_valid_json");
+
+    // A failed parse must not stop the run before the correction can be asked
+    // for — that is the whole point of the branch.
+    expect(byId.get("parse_plan")?.continueOnError).toBe(true);
+
+    const ask = byId.get("request_valid_json");
+    expect(ask?.type).toBe("TYPE");
+    // It has to tell the planner what was actually wrong.
+    expect(String(ask?.config.value)).toContain("{{flowPlanError}}");
+    expect(byId.get("submit_valid_json")?.type).toBe("PRESS_KEY");
+    expect(byId.get("parse_plan_retry")?.type).toBe("PARSE_JSON");
+    expect(byId.get("plan_ready_retry")?.config.trueNodeId).toBe("capture_plan");
+  });
+
+  it("fails a hopeless plan diagnosably and retryably, not as PERMANENT", () => {
+    // One bad generation is not a broken workflow; filing it as PERMANENT
+    // strands a run that is one retry from working.
+    const fail = byId.get("plan_unusable");
+    expect(fail?.type).toBe("FAIL");
+    expect(fail?.config.errorCode).toBe("PLAN_JSON_UNUSABLE");
+    expect(fail?.config.category).toBe("TRANSIENT");
+    expect(fail?.config.retryable).toBe(true);
+    expect(String(fail?.config.errorMessage)).toContain("{{flowPlanError}}");
+  });
+
+  it("routes both the happy path and the corrected path into the same continuation", () => {
+    for (const id of ["plan_ready", "plan_ready_retry"]) {
+      expect(byId.get(id)?.config.trueNodeId).toBe("capture_plan");
+    }
+    expect(byId.get("capture_plan")?.next).toBe("open_flow");
   });
 
   it("opens Flow in its own tab so the planner conversation stays alive", () => {

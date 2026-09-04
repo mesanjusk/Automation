@@ -66,42 +66,74 @@ function masterPrompt(): string {
   ].join("\n");
 }
 
+/**
+ * Reads the planner's latest reply — and nothing else.
+ *
+ * The previous version waited on a heuristic ("the text has not changed for
+ * 4.5 seconds"), which a streamed reply satisfies every time it pauses to
+ * think. It then parsed and reshaped the plan inside the page, so one stray
+ * character in a four-thousand-character answer threw from `page.evaluate` and
+ * ended the whole run as PERMANENT.
+ *
+ * Now it only waits and returns raw text. Waiting keys off the signals the app
+ * itself gives — the stop-streaming button that is present for exactly as long
+ * as the model is writing, and the copy-message action that appears only once
+ * a turn is finished — with text stability kept as a backstop for a UI that
+ * offers neither. Parsing happens in PARSE_JSON, where a bad reply is a branch
+ * rather than a fatal error.
+ */
 const COLLECT_PLAN_SCRIPT = `async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  let last = "", stable = 0;
-  for (let i = 0; i < 180; i++) {
+  const STREAMING = '[data-testid="stop-button"], button[aria-label*="Stop"], .result-streaming';
+  const FINISHED = '[data-testid="copy-turn-action-button"], [data-testid="good-response-turn-action-button"]';
+  const lastTurn = () => {
     const nodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
-    const el = nodes[nodes.length - 1];
-    const text = (el?.innerText || el?.textContent || "").trim();
-    if (text && text === last && text.length > 160) stable++; else stable = 0;
-    last = text || last;
-    if (stable >= 3) break;
+    return nodes[nodes.length - 1] || null;
+  };
+  const textOf = (el) => ((el && (el.innerText || el.textContent)) || "").trim();
+
+  let text = "";
+  let previous = "";
+  let stableFor = 0;
+  let sawStreaming = false;
+  let settledAt = 0;
+  const started = Date.now();
+
+  // 10 minutes: a full production plan is long, and a slow answer is not a
+  // broken one. The bound exists so a dead tab cannot hang the run forever.
+  while (Date.now() - started < 600000) {
+    const streaming = document.querySelector(STREAMING) !== null;
+    if (streaming) { sawStreaming = true; settledAt = 0; }
+    text = textOf(lastTurn());
+
+    if (!streaming && text) {
+      const turn = lastTurn();
+      const complete = turn ? turn.closest('article, [data-testid^="conversation-turn"]') : null;
+      const finished = complete ? complete.querySelector(FINISHED) !== null : false;
+      stableFor = text === previous ? stableFor + 1 : 0;
+      if (!settledAt) settledAt = Date.now();
+
+      // Finished when the app says so, or — for a UI that exposes neither
+      // signal — when nothing has changed for six seconds AND we either
+      // watched it stream or have waited long enough that we cannot have
+      // caught it mid-answer.
+      if (finished && stableFor >= 1) break;
+      if (stableFor >= 4 && (sawStreaming || Date.now() - started > 15000)) break;
+    } else {
+      stableFor = 0;
+    }
+    previous = text;
     await sleep(1500);
   }
-  if (!last) throw new Error("ChatGPT response was not detected.");
-  const raw = last.replace(/^\\s*\`\`\`(?:json)?/i, "").replace(/\`\`\`\\s*$/, "").trim();
-  const start = raw.indexOf("{"), end = raw.lastIndexOf("}");
-  if (start === -1 || end === -1) throw new Error("ChatGPT did not return JSON. Reply was: " + last.slice(0, 900));
-  let plan;
-  try { plan = JSON.parse(raw.slice(start, end + 1)); }
-  catch (e) { throw new Error("ChatGPT returned malformed JSON (" + e.message + "). Reply was: " + last.slice(0, 900)); }
-  if (!Array.isArray(plan.shots) || plan.shots.length === 0) throw new Error("The production mission contains no shots.");
-  plan.shots = plan.shots.map((shot, i) => ({
-    ...shot,
-    index: i + 1,
-    durationSeconds: Number(shot.durationSeconds || 8),
-    prompt: [
-      i > 0 ? "Continue directly from the final frame/visual identity of the previous generated clip." : "",
-      plan.continuityLock ? "CONTINUITY LOCK — DO NOT CHANGE: " + plan.continuityLock : "",
-      String(shot.prompt || shot.visual || "").trim(),
-      shot.camera ? "Camera: " + shot.camera : "",
-      shot.voiceover ? "Voice-over: " + shot.voiceover : "",
-      shot.dialogue ? "Dialogue: " + shot.dialogue : "",
-      shot.onScreenText ? "On-screen text: " + shot.onScreenText : "",
-      "Aspect ratio: " + (plan.aspectRatio || "9:16") + ". Target duration: " + Number(shot.durationSeconds || 8) + " seconds.",
-    ].filter(Boolean).join("\\n")
-  }));
-  return plan;
+
+  if (!text) throw new Error("ChatGPT did not produce a reply within 10 minutes.");
+  return {
+    text,
+    length: text.length,
+    watchedStreaming: sawStreaming,
+    waitedMs: Date.now() - started,
+    settledMs: settledAt ? Date.now() - settledAt : 0,
+  };
 }`;
 
 /**
@@ -117,8 +149,85 @@ export function buildVideoStudioWorkflow(): WorkflowDefinition {
     node({ id: "capture_chatgpt", type: "SCREENSHOT", name: "Capture ChatGPT page", config: {}, next: "wait_chat_box", timeout: 15_000, continueOnError: true }),
     node({ id: "wait_chat_box", type: "WAIT_FOR_SELECTOR", name: "Wait for ChatGPT input", config: { target: CHATGPT_COMPOSER }, next: "type_master_prompt", timeout: 25_000 }),
     node({ id: "type_master_prompt", type: "TYPE", name: "Send idea to production planner", config: { target: CHATGPT_COMPOSER, value: masterPrompt() }, next: "submit_chatgpt", timeout: 25_000 }),
-    node({ id: "submit_chatgpt", type: "PRESS_KEY", name: "Submit idea", config: { target: CHATGPT_COMPOSER, key: "Enter" }, next: "collect_flow_plan", timeout: 15_000 }),
-    node({ id: "collect_flow_plan", type: "EXECUTE_JS", name: "Collect complete video mission", config: { script: COLLECT_PLAN_SCRIPT, variableName: "flowPlan" }, next: "capture_plan", timeout: 300_000 }),
+    node({ id: "submit_chatgpt", type: "PRESS_KEY", name: "Submit idea", config: { target: CHATGPT_COMPOSER, key: "Enter" }, next: "collect_plan_reply", timeout: 15_000 }),
+
+    // Read, then parse, as two separate steps. The read cannot fail on the
+    // shape of the answer and the parse cannot fail on the speed of it, so
+    // each failure names its own cause and can be recovered from differently.
+    node({ id: "collect_plan_reply", type: "EXECUTE_JS", name: "Wait for the complete production mission", config: { script: COLLECT_PLAN_SCRIPT, variableName: "planReply" }, next: "parse_plan", timeout: 660_000 }),
+    node({
+      id: "parse_plan",
+      type: "PARSE_JSON",
+      name: "Parse the production mission",
+      config: { sourceVariable: "planReply.result.text", variableName: "flowPlan", require: ["shots"] },
+      next: "plan_ready",
+      timeout: 15_000,
+      // Not fatal: an unusable reply gets one chance to be corrected below.
+      continueOnError: true,
+    }),
+    node({
+      id: "plan_ready",
+      type: "CONDITION",
+      name: "Is the production mission usable?",
+      config: { condition: { left: "flowPlan", operator: "exists" }, trueNodeId: "capture_plan", falseNodeId: "request_valid_json" },
+      timeout: 0,
+    }),
+
+    // The planner is still sitting in a live conversation, so the cheapest fix
+    // for a malformed answer is to tell it what was wrong and read the next
+    // one — which is what a person would do, and what the browser agent
+    // already does for its own decisions.
+    node({
+      id: "request_valid_json",
+      type: "TYPE",
+      name: "Ask the planner to resend valid JSON",
+      config: {
+        target: CHATGPT_COMPOSER,
+        value: [
+          "Your previous reply could not be parsed as JSON: {{flowPlanError}}",
+          "",
+          "Resend the SAME production mission as one strict JSON object and nothing else.",
+          "No markdown fences, no commentary, no trailing commas.",
+          'Every double quote inside a string value must be escaped as \\" — write 6-inch rather than 6".',
+          "Do not change the creative content; only fix the JSON.",
+        ].join("\n"),
+      },
+      next: "submit_valid_json",
+      timeout: 25_000,
+    }),
+    node({ id: "submit_valid_json", type: "PRESS_KEY", name: "Submit the correction request", config: { target: CHATGPT_COMPOSER, key: "Enter" }, next: "collect_plan_retry", timeout: 15_000 }),
+    node({ id: "collect_plan_retry", type: "EXECUTE_JS", name: "Wait for the corrected mission", config: { script: COLLECT_PLAN_SCRIPT, variableName: "planReply" }, next: "parse_plan_retry", timeout: 660_000 }),
+    node({
+      id: "parse_plan_retry",
+      type: "PARSE_JSON",
+      name: "Parse the corrected mission",
+      config: { sourceVariable: "planReply.result.text", variableName: "flowPlan", require: ["shots"] },
+      next: "plan_ready_retry",
+      timeout: 15_000,
+      continueOnError: true,
+    }),
+    node({
+      id: "plan_ready_retry",
+      type: "CONDITION",
+      name: "Is the corrected mission usable?",
+      config: { condition: { left: "flowPlan", operator: "exists" }, trueNodeId: "capture_plan", falseNodeId: "plan_unusable" },
+      timeout: 0,
+    }),
+    node({
+      id: "plan_unusable",
+      type: "FAIL",
+      name: "Production mission could not be read",
+      config: {
+        errorCode: "PLAN_JSON_UNUSABLE",
+        errorMessage: "The production planner did not return usable JSON, even after being asked to correct it. Last parse failure: {{flowPlanError}}",
+        // Retryable on purpose: this is one bad generation, not a broken
+        // workflow, and the same run started again usually succeeds.
+        category: "TRANSIENT",
+        retryable: true,
+      },
+      timeout: 0,
+    }),
+
     node({ id: "capture_plan", type: "SCREENSHOT", name: "Capture production mission", config: {}, next: "open_flow", timeout: 15_000, continueOnError: true }),
     node({ id: "open_flow", type: "NEW_TAB", name: "Open Google Flow", config: { url: "https://labs.google/fx/tools/flow" }, next: "flow_browser_agent", timeout: 60_000, retry: RETRY_ONCE }),
     node({

@@ -317,31 +317,73 @@ Respond ONLY with a valid JSON object matching this exact schema:
 }
 
 async function callGemini(systemPrompt) {
-  const model = settings.geminiModel || "gemini-3.6-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
+  const primaryModel = settings.geminiModel || "gemini-3.6-flash";
+  const candidateModels = [
+    primaryModel,
+    "gemini-2.5-flash",
+    "gemini-3.8-flash",
+    "gemini-2.5-pro"
+  ];
+  const modelsToTry = candidateModels.filter((m, idx, self) => self.indexOf(m) === idx);
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: systemPrompt }] }],
-      generationConfig: {
-        temperature: 0.1,
-        responseMimeType: "application/json"
+  let lastError = null;
+
+  for (const model of modelsToTry) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: systemPrompt }] }],
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: "application/json"
+            }
+          })
+        });
+
+        if (response.status === 503 || response.status === 429) {
+          const errData = await response.json().catch(() => ({}));
+          const errMsg = errData?.error?.message || `HTTP ${response.status}`;
+          console.warn(`Model ${model} high demand (${errMsg}). Retrying in 2s...`);
+          setStatus(`Model busy, retrying (${model})...`, "thinking");
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          const msg = errorData?.error?.message || `Gemini API error: HTTP ${response.status}`;
+          if (msg.includes("high demand") || msg.includes("quota") || msg.includes("overloaded")) {
+            console.warn(`Model ${model} overloaded. Falling back...`);
+            setStatus(`Switching to backup model...`, "thinking");
+            await new Promise(r => setTimeout(r, 1500));
+            break;
+          }
+          throw new Error(msg);
+        }
+
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawText) throw new Error("Empty response from Gemini API");
+
+        return JSON.parse(rawText);
+      } catch (err) {
+        lastError = err;
+        if (err.message.includes("API key")) {
+          throw err;
+        }
+        if (err.message.includes("high demand") || err.message.includes("503") || err.message.includes("overloaded")) {
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
       }
-    })
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData?.error?.message || `Gemini API error: HTTP ${response.status}`);
+    }
   }
 
-  const data = await response.json();
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) throw new Error("Empty response from Gemini API");
-
-  return JSON.parse(rawText);
+  throw lastError || new Error("Failed to get response from Gemini API after fallback attempts.");
 }
 
 async function callOllama(systemPrompt) {

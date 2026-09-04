@@ -136,9 +136,11 @@
       const isEditable = (
         tag === "textarea" ||
         (tag === "input" && !["button", "submit", "reset", "checkbox", "radio", "file"].includes(type)) ||
-        el.getAttribute("contenteditable") === "true"
+        el.isContentEditable ||
+        el.getAttribute("contenteditable") !== null ||
+        role === "textbox"
       );
-      const currentValue = isEditable ? (el.value || el.innerText || "") : null;
+      const currentValue = isEditable ? (el.value !== undefined && el.value !== "" ? el.value : el.innerText || "") : null;
       const isDisabled = el.disabled || el.getAttribute("aria-disabled") === "true";
 
       elements.push({

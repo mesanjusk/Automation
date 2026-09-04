@@ -19,10 +19,60 @@
     }, duration);
   }
 
-  function triggerReactInput(el, value) {
+  function findTargetInput(targetEl) {
+    if (!targetEl) return null;
+    if (targetEl.tagName === "INPUT" || targetEl.tagName === "TEXTAREA" || targetEl.isContentEditable) {
+      return targetEl;
+    }
+    const inner = targetEl.querySelector("input, textarea, [contenteditable='true'], [contenteditable=''], [contenteditable='plaintext-only'], [role='textbox']");
+    if (inner) return inner;
+    return targetEl;
+  }
+
+  function setElementValue(targetEl, value) {
+    const el = findTargetInput(targetEl);
     el.focus();
-    // Use native prototype setter to ensure React / Vue / Angular change-detection triggers
+
     const tag = el.tagName.toLowerCase();
+    const isInputOrTextarea = tag === "input" || tag === "textarea";
+    const isContentEditable = el.isContentEditable || el.getAttribute("contenteditable") !== null || el.getAttribute("role") === "textbox";
+
+    if (isContentEditable && !isInputOrTextarea) {
+      el.focus();
+
+      // Select existing content
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      let success = false;
+      try {
+        success = document.execCommand("insertText", false, value);
+      } catch (e) {
+        success = false;
+      }
+
+      if (!success || el.innerText.trim() !== value.trim()) {
+        el.dispatchEvent(new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: value
+        }));
+        el.innerText = value;
+        el.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: value
+        }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return;
+    }
+
     const proto = tag === "textarea" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
 
@@ -32,7 +82,6 @@
       el.value = value;
     }
 
-    // Dispatch comprehensive input events
     el.dispatchEvent(new Event("beforeinput", { bubbles: true, cancelable: true }));
     el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
     el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
@@ -127,11 +176,13 @@
     }
 
     if (action === "type") {
-      flashHighlight(el, "webcopilot-highlight-type");
-      triggerReactInput(el, value ?? "");
+      const activeInput = findTargetInput(el);
+      flashHighlight(activeInput || el, "webcopilot-highlight-type");
+      setElementValue(el, value ?? "");
+      const preview = (value || "").slice(0, 45);
       return {
         success: true,
-        detail: `Typed "${value}" into [${ref}]`
+        detail: `Typed "${preview}${value && value.length > 45 ? "..." : ""}" into [${ref}]`
       };
     }
 

@@ -110,6 +110,11 @@ export const nodeConfigSchema = z
     sourceVariable: z.string().optional(),
     /** Dotted paths that must exist and be non-empty in the parsed value, or the parse counts as failed. */
     require: z.array(z.string()).optional(),
+    // WAIT_FOR_LOGIN
+    /** Pages to open, one tab each, for a person to sign in to before the run continues. */
+    urls: z.array(z.string()).optional(),
+    /** What to tell the person at the terminal they need to do. */
+    message: z.string().optional(),
     // WAIT_FOR_TEXT
     text: z.string().optional(),
     /** Wait for the text to DISAPPEAR rather than appear (spinners, "Saving..."). */

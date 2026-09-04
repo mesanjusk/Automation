@@ -8,6 +8,7 @@ import type { WorkflowDefinition } from "@bos/shared";
 import { buildEngineHooks } from "./hooks";
 import { buildVisualFallback } from "./aiAgent";
 import { deliverWebhook } from "./webhookDelivery";
+import { buildTerminalHumanGate } from "./humanGate";
 
 const WORKER_ID = process.env.WORKER_ID || `worker-${process.pid}`;
 
@@ -43,6 +44,9 @@ export async function processTaskJob(taskId: string): Promise<void> {
         // website. Do not silently fall back to a paid Gemini vision/API call.
         visualFallback: browserAgentMode === "chatgpt-web" ? undefined : buildVisualFallback(),
         maxAiActions: browserAgentMode === "chatgpt-web" ? Number(process.env.BROWSER_AGENT_MAX_ACTIONS || 150) : undefined,
+        // WAIT_FOR_LOGIN asks at the worker's terminal and holds the browser
+        // open while a person signs in — no password ever passes through here.
+        confirmWithHuman: buildTerminalHumanGate(),
         resolveSecret: async (name: string) => {
           const credential = await Credential.findOne({ name, status: "active" }).select("+encryptedValue");
           return credential?.encryptedValue ? decrypt(credential.encryptedValue) : undefined;

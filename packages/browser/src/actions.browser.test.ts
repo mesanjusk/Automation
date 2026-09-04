@@ -33,7 +33,32 @@ afterAll(async () => {
 });
 
 function sessionFor(target: Page): BrowserSession {
-  return { activePage: target, tabs: [target], activeTabIndex: 0 } as unknown as BrowserSession;
+  return { activePage: target, tabs: [target], activeTabIndex: 0, headless: false } as unknown as BrowserSession;
+}
+
+/** A session backed by the real browser context, so tabs really open and persist. */
+function liveSession(first: Page, headless = false): BrowserSession {
+  const tabs: Page[] = [first];
+  const session = {
+    tabs,
+    activeTabIndex: 0,
+    headless,
+    get activePage() {
+      return tabs[session.activeTabIndex]!;
+    },
+    switchTab(index: number) {
+      session.activeTabIndex = index;
+      return tabs[index]!;
+    },
+    async newTab(url?: string) {
+      const page = await first.context().newPage();
+      tabs.push(page);
+      session.activeTabIndex = tabs.length - 1;
+      if (url) await page.goto(url, { waitUntil: "domcontentloaded" });
+      return page;
+    },
+  };
+  return session as unknown as BrowserSession;
 }
 
 function node(partial: Partial<WorkflowNode> & Pick<WorkflowNode, "id" | "type" | "name">): WorkflowNode {
@@ -190,5 +215,114 @@ describeBrowser("executeBrowserAction with refs", () => {
     await expect(
       executeBrowserAction(sessionFor(page), node({ id: "c", type: "CLICK", name: "click", config: {} }), ctx)
     ).rejects.toThrow(/requires a target selector/);
+  });
+});
+
+describeBrowser("WAIT_FOR_LOGIN", () => {
+  it("opens each site, waits for the person, and leaves the tabs open", async () => {
+    if (!browser) return;
+    const context = await browser.newContext();
+    const first = await context.newPage();
+    // Data URLs stand in for the real sign-in pages: what is being tested is
+    // that the run opens the tabs, hands control to a person, and continues in
+    // the same session — not anything about Google or ChatGPT specifically.
+    const signedIn = `data:text/html,<title>Inbox</title><h1>Signed in</h1>`;
+    const alsoSignedIn = `data:text/html,<title>Studio</title><h1>Ready</h1>`;
+    const prompts: string[] = [];
+    const session = liveSession(first);
+
+    const result = await executeBrowserAction(
+      session,
+      node({
+        id: "gate",
+        type: "WAIT_FOR_LOGIN",
+        name: "sign in",
+        config: { urls: [signedIn, alsoSignedIn], message: "Sign in to both.", screenshot: false },
+      }),
+      { ...ctx, confirmWithHuman: async (prompt) => { prompts.push(prompt); } }
+    );
+
+    // Both tabs are still open and usable afterwards — the whole point.
+    expect(session.tabs).toHaveLength(2);
+    expect(await session.tabs[0]!.title()).toBe("Inbox");
+    expect(await session.tabs[1]!.title()).toBe("Studio");
+    // And it hands back to the first tab so the next step starts where it expects.
+    expect(session.activeTabIndex).toBe(0);
+    expect((result.output as { signedOutTabs: string[] }).signedOutTabs).toEqual([]);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Sign in to both.");
+    await context.close();
+  });
+
+  it("reuses the tab the run started in rather than stranding a blank one", async () => {
+    if (!browser) return;
+    const context = await browser.newContext();
+    const first = await context.newPage();
+    const session = liveSession(first);
+
+    await executeBrowserAction(
+      session,
+      node({ id: "gate", type: "WAIT_FOR_LOGIN", name: "sign in", config: { urls: [`data:text/html,<title>Only</title>`], screenshot: false } }),
+      { ...ctx, confirmWithHuman: async () => undefined }
+    );
+
+    expect(session.tabs).toHaveLength(1);
+    expect(await session.tabs[0]!.title()).toBe("Only");
+    await context.close();
+  });
+
+  it("asks a second time when a tab still looks signed out, then continues", async () => {
+    if (!browser) return;
+    const context = await browser.newContext();
+    const first = await context.newPage();
+    const session = liveSession(first);
+    const prompts: string[] = [];
+
+    const result = await executeBrowserAction(
+      session,
+      node({
+        id: "gate",
+        type: "WAIT_FOR_LOGIN",
+        name: "sign in",
+        config: { urls: [`data:text/html,<title>Sign in to continue</title>`], screenshot: false },
+      }),
+      { ...ctx, confirmWithHuman: async (prompt) => { prompts.push(prompt); } }
+    );
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("still look signed out");
+    // It warns, it does not block: the person at the keyboard decides.
+    expect((result.output as { signedOutTabs: string[] }).signedOutTabs).toHaveLength(1);
+    await context.close();
+  });
+
+  it("refuses to ask for a sign-in that nobody could perform", async () => {
+    if (!browser) return;
+    const context = await browser.newContext();
+    const first = await context.newPage();
+
+    await expect(
+      executeBrowserAction(
+        liveSession(first, true),
+        node({ id: "gate", type: "WAIT_FOR_LOGIN", name: "sign in", config: { urls: ["data:text/html,x"] } }),
+        { ...ctx, confirmWithHuman: async () => undefined }
+      )
+    ).rejects.toThrow(/PLAYWRIGHT_HEADLESS=false/);
+    await context.close();
+  });
+
+  it("says what to do when there is no terminal to ask at", async () => {
+    if (!browser) return;
+    const context = await browser.newContext();
+    const first = await context.newPage();
+
+    await expect(
+      executeBrowserAction(
+        liveSession(first),
+        node({ id: "gate", type: "WAIT_FOR_LOGIN", name: "sign in", config: { urls: ["data:text/html,x"] } }),
+        ctx
+      )
+    ).rejects.toThrow(/npm run worker/);
+    await context.close();
   });
 });

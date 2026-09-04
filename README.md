@@ -62,7 +62,8 @@ your own Docker host). They only share MongoDB and Redis.
 - **Workflow** — a graph of typed nodes (`NAVIGATE`, `CLICK`, `TYPE`,
   `EXTRACT_TEXT`, `WAIT_FOR_TEXT`, `SCROLL_TO_ELEMENT`, `PROBE_PAGE`,
   `WAIT_FOR_STATE`, `FLOW_NAVIGATE`, `CONDITION`, `LOOP`, `FOR_EACH`,
-  `PARSE_JSON`, `AI_DECISION`, `HUMAN_APPROVAL`, `WEBHOOK`, …). Versioned —
+  `PARSE_JSON`, `WAIT_FOR_LOGIN`, `AI_DECISION`, `HUMAN_APPROVAL`, `WEBHOOK`,
+  …). Versioned —
   saving never overwrites a published version, it creates a new one.
 - **Automation** — a named, API-triggerable wrapper around a published
   workflow (+ default browser profile / callback URL / schedule).
@@ -116,6 +117,15 @@ your own Docker host). They only share MongoDB and Redis.
   site's own confirmation appears (or a spinner's text disappears), which is
   both faster than a guessed sleep when the site is quick and correct when it
   is slow.
+- **Signing in stays human** — `WAIT_FOR_LOGIN` opens the sites a run needs an
+  account on, then blocks *inside the run* at the worker's terminal until the
+  person says they are done, and continues in that same window. This is not the
+  same as a `HUMAN_APPROVAL` pause: pausing ends the engine run and the worker
+  closes the browser on its way out, so the window someone was meant to sign in
+  to would disappear before they could. The platform never types a password and
+  never works around a CAPTCHA or a 2FA prompt — it opens the tab and waits.
+  Needs `PLAYWRIGHT_HEADLESS=false` and a worker started in a terminal; it
+  refuses, with instructions, rather than hanging when either is missing.
 - **Reading a model's reply** — `PARSE_JSON` takes text a workflow scraped out
   of a page and parses it in the worker, not in a page script. It repairs what
   is safely repairable (a markdown fence, a trailing comma, typographic quotes,
@@ -136,11 +146,15 @@ your own Docker host). They only share MongoDB and Redis.
   `flow_generating`, `flow_clip_complete`, `flow_error`) so a failed run can be
   diagnosed from the dashboard. A profile that is not signed in to Google
   fails as `GOOGLE_LOGIN_REQUIRED`, not as a selector timeout.
-- **Video Studio** — idea → ChatGPT (the user's logged-in browser tab, no paid
-  API) → a structured shot-by-shot production plan → Google Flow, generating
+- **Video Studio** — sign in → idea → ChatGPT (the user's logged-in browser tab,
+  no paid API) → a structured shot-by-shot production plan → Google Flow,
+  generating
   every planned clip in order with the continuity lock carried into each
   prompt. Runs with `executionTarget: "local"`, which the worker claims by
   polling MongoDB — no Redis, so cloud/Render automations are unaffected.
+  The run opens ChatGPT and Google Flow, waits at the worker's terminal for you
+  to sign in to both, and then reuses those exact tabs — which is why it needs
+  `PLAYWRIGHT_HEADLESS=false` and a worker you can type into.
   Reading the plan is split in three: a page script that only *waits* (keyed on
   ChatGPT's own stop-streaming and copy-message controls, so a reply that pauses
   mid-thought is not mistaken for a finished one), `PARSE_JSON`, and — if the
@@ -209,12 +223,13 @@ environments.
 npm test
 ```
 
-246 unit/integration tests cover workflow validation, the self-healing
+252 unit/integration tests cover workflow validation, the self-healing
 selector fallback chain (including ref binding, stale-ref recovery and iframe
 scoping), page-snapshot rendering and change detection, the agent tool
 adapter and its safety checks, the agent prompt contract, the retry/backoff
 policy, the engine's control flow (branching, loops, human-approval pausing,
 cancellation, the repeated-action guard, `PARSE_JSON` and its repairs), the
+manual sign-in gate, the
 lenient JSON reader on its own, the Video Studio mission builder, BullMQ job
 shaping, request-schema validation for the public API, and webhook HMAC
 signing.

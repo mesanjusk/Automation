@@ -14,7 +14,7 @@ const DEFAULT_SETTINGS = {
   ollamaUrl: "http://localhost:11434",
   ollamaModel: "llama3.2",
   showBadges: true,
-  maxSteps: 15
+  maxSteps: 30
 };
 
 let settings = { ...DEFAULT_SETTINGS };

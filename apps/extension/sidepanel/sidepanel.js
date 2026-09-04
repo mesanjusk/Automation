@@ -460,6 +460,11 @@ async function callGemini(systemPrompt) {
         if (!rawText.trim()) {
           const finishReason = candidate?.finishReason || data?.promptFeedback?.blockReason || "EMPTY";
           console.warn(`Model ${model} returned empty content (finishReason: ${finishReason}) on attempt ${attempt}`);
+
+          if (finishReason === "PROHIBITED_CONTENT") {
+            throw new Error(`Google AI content policy triggered (finishReason: PROHIBITED_CONTENT). This happens when prompts contain words like "toddler", "mouth", or sensitive child physical descriptions. Please rephrase using "Young Krishna" or "Divine Avatar" without words like "toddler" or "mouth".`);
+          }
+
           lastError = new Error(`Empty response from Gemini API (finishReason: ${finishReason})`);
           if (attempt < 3) {
             await new Promise(r => setTimeout(r, 1000));
@@ -486,7 +491,7 @@ async function callGemini(systemPrompt) {
         }
       } catch (err) {
         lastError = err;
-        if (err.message.includes("API key")) {
+        if (err.message.includes("API key") || err.message.includes("PROHIBITED_CONTENT")) {
           throw err;
         }
         await new Promise(r => setTimeout(r, 1000));
@@ -496,7 +501,7 @@ async function callGemini(systemPrompt) {
   }
 
   const finalMessage = lastError?.message
-    ? `Google AI servers: "${lastError.message}". Please ensure Settings is set to "gemini-2.5-flash" (100% Free Tier).`
+    ? `Google AI servers: "${lastError.message}".`
     : "Google AI servers are experiencing high demand. Please wait a moment and try again.";
   throw new Error(finalMessage);
 }

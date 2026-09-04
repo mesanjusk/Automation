@@ -268,6 +268,10 @@ function buildSystemPrompt(task, snapshot, history, outcome) {
     ? history.map((h, i) => `${i + 1}. [${h.action}] on [${h.ref || "none"}] -> ${h.detail || h.reason}`).join("\n")
     : "(No actions taken yet)";
 
+  const outcomeText = outcome
+    ? `LAST ACTION RESULT: ${outcome.success ? "SUCCESS" : "FAILED"}: ${outcome.detail || outcome.error}\nWHAT CHANGED: ${outcome.changed || "(not measured)"}`
+    : "(First turn)";
+
   const lastAction = history[history.length - 1];
   let dynamicGuidance = "";
 

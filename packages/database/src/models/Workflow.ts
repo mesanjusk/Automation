@@ -9,6 +9,14 @@ export interface IWorkflow extends Document {
   description?: string;
   status: WorkflowStatus;
   currentVersion: number;
+  /**
+   * Set when this workflow was produced by a code generator rather than
+   * hand-built in the editor (e.g. "video-studio"). Such a workflow has no life
+   * of its own: it is a snapshot of what the generator emitted at the moment
+   * the run started, so replaying it forever would pin the run to whatever the
+   * code did that day. Retries regenerate it instead.
+   */
+  generator?: string;
   publishedVersionId?: Types.ObjectId;
   createdBy?: Types.ObjectId;
   createdAt: Date;
@@ -21,6 +29,7 @@ const WorkflowSchema = new Schema<IWorkflow>(
     description: { type: String },
     status: { type: String, enum: ["draft", "published", "archived"], default: "draft" },
     currentVersion: { type: Number, default: 0 },
+    generator: { type: String },
     publishedVersionId: { type: Schema.Types.ObjectId, ref: "WorkflowVersion" },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
   },

@@ -10,7 +10,7 @@ let lastOutcome = null;
 const DEFAULT_SETTINGS = {
   provider: "gemini",
   apiKey: "",
-  geminiModel: "gemini-3.6-flash",
+  geminiModel: "gemini-2.5-flash",
   ollamaUrl: "http://localhost:11434",
   ollamaModel: "llama3.2",
   showBadges: true,
@@ -61,7 +61,7 @@ async function loadSettings() {
       settings.geminiModel === "gemini-1.5-flash" ||
       settings.geminiModel?.includes("pro")
     ) {
-      settings.geminiModel = "gemini-3.6-flash";
+      settings.geminiModel = "gemini-2.5-flash";
       await chrome.storage.local.set({ webcopilot_settings: settings });
     }
   }
@@ -89,7 +89,7 @@ function populateSettingsUI() {
 async function saveSettings() {
   settings.provider = settingProvider.value;
   settings.apiKey = settingApiKey.value.trim();
-  settings.geminiModel = settingGeminiModel.value.trim() || "gemini-3.6-flash";
+  settings.geminiModel = settingGeminiModel.value.trim() || "gemini-2.5-flash";
   settings.ollamaUrl = settingOllamaUrl.value.trim() || "http://localhost:11434";
   settings.ollamaModel = settingOllamaModel.value.trim() || "llama3.2";
   settings.showBadges = settingShowBadges.checked;
@@ -352,15 +352,17 @@ Respond ONLY with a valid JSON object matching this exact schema:
 }
 
 async function callGemini(systemPrompt) {
-  const primaryModel = settings.geminiModel || "gemini-3.6-flash";
+  const primaryModel = settings.geminiModel || "gemini-2.5-flash";
   const candidateModels = [
     primaryModel,
-    "gemini-3.6-flash",
     "gemini-2.5-flash",
+    "gemini-3.7-flash",
     "gemini-3.8-flash",
-    "gemini-3.1-flash-lite"
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.6-flash"
   ];
-  const modelsToTry = candidateModels.filter((m, idx, self) => self.indexOf(m) === idx);
+  const modelsToTry = candidateModels.filter((m, idx, self) => Boolean(m) && self.indexOf(m) === idx);
 
   let lastError = null;
 
@@ -368,15 +370,29 @@ async function callGemini(systemPrompt) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
+        
+        // On attempt 1 use responseMimeType: application/json.
+        // On attempt > 1, omit responseMimeType in case thinking mode or strict schema caused empty parts.
+        const generationConfig = {
+          temperature: 0.1
+        };
+        if (attempt === 1) {
+          generationConfig.responseMimeType = "application/json";
+        }
+
         const response = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: systemPrompt }] }],
-            generationConfig: {
-              temperature: 0.1,
-              responseMimeType: "application/json"
-            }
+            safetySettings: [
+              { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+              { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+              { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+              { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+              { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" }
+            ],
+            generationConfig
           })
         });
 
@@ -415,10 +431,52 @@ async function callGemini(systemPrompt) {
         }
 
         const data = await response.json();
-        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!rawText) throw new Error("Empty response from Gemini API");
+        const candidate = data?.candidates?.[0];
+        const parts = candidate?.content?.parts || [];
 
-        return JSON.parse(rawText);
+        // 1. Extract text from parts (filtering out pure thought blocks if present)
+        let rawText = "";
+        for (const p of parts) {
+          if (p.text && !p.thought) {
+            rawText += p.text;
+          }
+        }
+
+        // Fallback: if no non-thought text found, take any part with text
+        if (!rawText.trim()) {
+          for (const p of parts) {
+            if (p.text) rawText += p.text;
+          }
+        }
+
+        // If candidate is still empty, inspect reasons and retry or throw
+        if (!rawText.trim()) {
+          const finishReason = candidate?.finishReason || data?.promptFeedback?.blockReason || "EMPTY";
+          console.warn(`Model ${model} returned empty content (finishReason: ${finishReason}) on attempt ${attempt}`);
+          lastError = new Error(`Empty response from Gemini API (finishReason: ${finishReason})`);
+          if (attempt < 3) {
+            await new Promise(r => setTimeout(r, 1000));
+            continue; // retry without responseMimeType on attempt 2
+          }
+          break; // move to next candidate model
+        }
+
+        // 2. Clean markdown code fences if wrapped in ```json ... ```
+        let cleanText = rawText.trim();
+        cleanText = cleanText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
+        // 3. Parse JSON safely with substring regex fallback
+        try {
+          return JSON.parse(cleanText);
+        } catch (parseErr) {
+          const firstBrace = cleanText.indexOf('{');
+          const lastBrace = cleanText.lastIndexOf('}');
+          if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+            const jsonCandidate = cleanText.substring(firstBrace, lastBrace + 1);
+            return JSON.parse(jsonCandidate);
+          }
+          throw new Error(`Could not parse JSON action from Gemini response: ${cleanText.slice(0, 100)}`);
+        }
       } catch (err) {
         lastError = err;
         if (err.message.includes("API key")) {
@@ -431,7 +489,7 @@ async function callGemini(systemPrompt) {
   }
 
   const finalMessage = lastError?.message
-    ? `Google AI servers: "${lastError.message}". Please ensure Settings is set to "gemini-3.6-flash" or "gemini-2.5-flash" (100% Free Tier).`
+    ? `Google AI servers: "${lastError.message}". Please ensure Settings is set to "gemini-2.5-flash" (100% Free Tier).`
     : "Google AI servers are experiencing high demand. Please wait a moment and try again.";
   throw new Error(finalMessage);
 }

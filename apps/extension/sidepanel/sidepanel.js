@@ -320,9 +320,9 @@ async function callGemini(systemPrompt) {
   const primaryModel = settings.geminiModel || "gemini-3.6-flash";
   const candidateModels = [
     primaryModel,
-    "gemini-2.5-flash",
+    "gemini-3.6-flash",
     "gemini-3.8-flash",
-    "gemini-2.5-pro"
+    "gemini-3.1-pro-preview"
   ];
   const modelsToTry = candidateModels.filter((m, idx, self) => self.indexOf(m) === idx);
 
@@ -347,8 +347,8 @@ async function callGemini(systemPrompt) {
         if (response.status === 503 || response.status === 429) {
           const errData = await response.json().catch(() => ({}));
           const errMsg = errData?.error?.message || `HTTP ${response.status}`;
-          console.warn(`Model ${model} high demand (${errMsg}). Retrying in 2s...`);
-          setStatus(`Model busy, retrying (${model})...`, "thinking");
+          console.warn(`Model ${model} busy (${errMsg}). Retrying...`);
+          setStatus(`Model busy, retrying...`, "thinking");
           await new Promise(r => setTimeout(r, 2000));
           continue;
         }
@@ -356,13 +356,17 @@ async function callGemini(systemPrompt) {
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
           const msg = errorData?.error?.message || `Gemini API error: HTTP ${response.status}`;
-          if (msg.includes("high demand") || msg.includes("quota") || msg.includes("overloaded")) {
-            console.warn(`Model ${model} overloaded. Falling back...`);
-            setStatus(`Switching to backup model...`, "thinking");
-            await new Promise(r => setTimeout(r, 1500));
-            break;
+          lastError = new Error(msg);
+          console.warn(`Model ${model} returned error: ${msg}. Trying next fallback model...`);
+
+          if (msg.includes("API key")) {
+            throw new Error(msg);
           }
-          throw new Error(msg);
+
+          // If model is busy, retired, not available, or quota reached, advance to next model
+          setStatus(`Switching model...`, "thinking");
+          await new Promise(r => setTimeout(r, 1000));
+          break; // Break attempt loop to try next model in modelsToTry
         }
 
         const data = await response.json();
@@ -375,10 +379,8 @@ async function callGemini(systemPrompt) {
         if (err.message.includes("API key")) {
           throw err;
         }
-        if (err.message.includes("high demand") || err.message.includes("503") || err.message.includes("overloaded")) {
-          await new Promise(r => setTimeout(r, 1500));
-          continue;
-        }
+        await new Promise(r => setTimeout(r, 1000));
+        break; // Advance to next model
       }
     }
   }

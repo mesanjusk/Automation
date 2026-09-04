@@ -190,6 +190,8 @@
         rect: {
           x: Math.round(rect.left + window.scrollX),
           y: Math.round(rect.top + window.scrollY),
+          clientX: Math.round(rect.left),
+          clientY: Math.round(rect.top),
           width: Math.round(rect.width),
           height: Math.round(rect.height)
         }

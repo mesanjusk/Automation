@@ -561,13 +561,58 @@ async function startAgentTask() {
         await new Promise(r => setTimeout(r, ms));
         execResult = { success: true, detail: `Waited ${ms}ms` };
       } else {
-        await ensureExecutorInjected(currentTabId);
-        execResult = await runActionExecutor(currentTabId, {
-          action: decision.action,
-          ref: decision.ref,
-          value: decision.value,
-          key: decision.key
-        });
+        // Attempt trusted CDP hardware execution first if coordinates or key known
+        const targetMeta = snapshot.elements?.find(e => e.ref === decision.ref);
+        let cdpSuccess = false;
+
+        if (targetMeta && targetMeta.rect && (decision.action === "type" || decision.action === "click")) {
+          const clientX = targetMeta.rect.clientX !== undefined ? targetMeta.rect.clientX : (targetMeta.rect.x - (snapshot.scroll?.y || 0));
+          const clientY = targetMeta.rect.clientY !== undefined ? targetMeta.rect.clientY : (targetMeta.rect.y - (snapshot.scroll?.y || 0));
+          const targetX = clientX + targetMeta.rect.width / 2;
+          const targetY = clientY + targetMeta.rect.height / 2;
+
+          try {
+            const res = await chrome.runtime.sendMessage({
+              type: "CDP_ACTION",
+              tabId: currentTabId,
+              action: decision.action,
+              x: targetX,
+              y: targetY,
+              text: decision.value,
+              key: decision.key || decision.value
+            });
+            if (res && res.success) {
+              execResult = res;
+              cdpSuccess = true;
+            }
+          } catch (cdpErr) {
+            console.warn("CDP action error, using DOM executor:", cdpErr);
+          }
+        } else if (decision.action === "press") {
+          try {
+            const res = await chrome.runtime.sendMessage({
+              type: "CDP_ACTION",
+              tabId: currentTabId,
+              action: "press",
+              key: decision.key || decision.value || "Enter"
+            });
+            if (res && res.success) {
+              execResult = res;
+              cdpSuccess = true;
+            }
+          } catch (cdpErr) {}
+        }
+
+        // If CDP was not used or did not report success, fallback to DOM executor
+        if (!cdpSuccess) {
+          await ensureExecutorInjected(currentTabId);
+          execResult = await runActionExecutor(currentTabId, {
+            action: decision.action,
+            ref: decision.ref,
+            value: decision.value,
+            key: decision.key
+          });
+        }
       }
 
       // Update step card with outcome
@@ -617,5 +662,6 @@ function stopAgentTask() {
   setStatus("Ready", "normal");
   if (currentTabId) {
     runActionExecutor(currentTabId, { action: "clearBadges" }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "CDP_DETACH", tabId: currentTabId }).catch(() => {});
   }
 }

@@ -51,17 +51,27 @@
     const text = cleanText(el.innerText || el.textContent);
     if (text) return text;
 
-    // Check for icon or SVG buttons with no visible text (e.g. send arrow buttons)
+    // Check for button labeling in prompt composers or with icon/SVG
     if (el.tagName === "BUTTON" || el.getAttribute("role") === "button") {
+      const textVal = (el.innerText || el.textContent || "").trim();
+      if (/arrow|send|submit|forward|generate|play/i.test(textVal) || /[→➜➔►>]/.test(textVal)) {
+        return "Submit / Send prompt button";
+      }
       const svg = el.querySelector("svg");
       if (svg) {
         const svgAria = svg.getAttribute("aria-label") || svg.getAttribute("title");
         if (svgAria) return cleanText(svgAria);
         const allAttrs = `${el.className || ""} ${el.id || ""} ${svg.getAttribute("class") || ""}`;
         if (/send|submit|arrow|enter|generate|forward/i.test(allAttrs)) {
-          return "Submit / Send button";
+          return "Submit / Send prompt button";
+        }
+        if (el.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar']")) {
+          return "Submit / Send prompt button";
         }
         return "Action button";
+      }
+      if (el.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar']")) {
+        return "Submit / Send prompt button";
       }
     }
 

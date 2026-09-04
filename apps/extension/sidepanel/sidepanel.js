@@ -268,9 +268,26 @@ function buildSystemPrompt(task, snapshot, history, outcome) {
     ? history.map((h, i) => `${i + 1}. [${h.action}] on [${h.ref || "none"}] -> ${h.detail || h.reason}`).join("\n")
     : "(No actions taken yet)";
 
-  const outcomeText = outcome
-    ? `LAST ACTION RESULT: ${outcome.success ? "SUCCESS" : "FAILED"}: ${outcome.detail || outcome.error}\nWHAT CHANGED: ${outcome.changed || "(not measured)"}`
-    : "(First turn)";
+  const lastAction = history[history.length - 1];
+  let dynamicGuidance = "";
+
+  if (lastAction && lastAction.action === "type") {
+    dynamicGuidance = `
+CRITICAL INSTRUCTION:
+You typed into [${lastAction.ref || "input"}]. The prompt has NOT been submitted yet!
+Do NOT call "wait"!
+Your NEXT action MUST be to submit:
+- Click the "Submit / Send prompt button" (look for the arrow button in the outline, e.g. [e15])
+- OR press Enter on the input box: {"action": "press", "ref": "${lastAction.ref}", "key": "Enter"}
+`;
+  } else if (lastAction && lastAction.action === "wait") {
+    dynamicGuidance = `
+CRITICAL INSTRUCTION:
+You called "wait". Look closely at the outline:
+- If the prompt text is STILL sitting inside the input box and no progress/generation has started, it was NEVER SUBMITTED!
+- DO NOT CALL "wait" AGAIN! Click the "Submit / Send prompt button" now!
+`;
+  }
 
   return `
 You are WebCopilot, an expert autonomous browser automation agent.
@@ -291,8 +308,8 @@ RULES:
    - "task_fail": blocked by CAPTCHA, MFA, payment, or error. Requires "reason".
 5. SUBMITTING PROMPTS & FORMS:
    - After typing into a prompt or search box, you MUST submit it.
-   - To submit: Use {"action": "press", "ref": "<input_ref>", "key": "Enter"} to hit Enter on the input field, OR click the Send/Submit arrow button immediately adjacent to the input field. Do NOT click unrelated "Create" or "+" buttons in the top navigation bar!
-   - If the text is still sitting in the input box and no loading indicator or generation has started, it was NOT submitted! Press Enter on the input box.
+   - To submit: Click the "Submit / Send prompt button" (or arrow icon next to the input), OR use {"action": "press", "ref": "<input_ref>", "key": "Enter"}. Do NOT click unrelated "Create" or "+" buttons in the top navigation bar!
+   - If the text is still sitting in the input box and no loading indicator or generation has started, it was NOT submitted! Click the submit button!
 
 6. CRITICAL EVIDENCE RULE FOR task_complete:
    - NEVER call "task_complete" based on an assumption (e.g. "I assume it is finished").
@@ -313,7 +330,7 @@ ${outcomeText}
 
 PREVIOUS ACTIONS HISTORY:
 ${historyText}
-
+${dynamicGuidance}
 Respond ONLY with a valid JSON object matching this exact schema:
 {
   "thought": "Brief explanation of what you see and why you chose this action",

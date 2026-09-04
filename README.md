@@ -41,6 +41,7 @@ your own Docker host). They only share MongoDB and Redis.
   /web         Next.js dashboard + public API (deploy to Vercel)
   /worker      BullMQ consumer + Playwright + scheduler (deploy to Render)
   /test-site   Tiny local fixture website used by the demo automation & e2e
+  /extension   WebCopilot AI — Autonomous Chrome Extension (Manifest V3 Side Panel)
 
 /packages
   /shared              Zod schemas, enums, types shared everywhere

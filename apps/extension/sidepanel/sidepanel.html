@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebCopilot AI</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <div class="brand-icon">🤖</div>
+        <div class="brand-text">
+          <span class="title">WebCopilot</span>
+          <span class="status-badge" id="status-indicator">Ready</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-clear" class="icon-btn" title="Clear Conversation">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+        </button>
+        <button id="btn-settings" class="icon-btn" title="Settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Page Context Pill -->
+    <div class="page-context" id="page-context-bar">
+      <span class="context-icon">🌐</span>
+      <span class="context-title" id="page-context-title">Detecting active page...</span>
+    </div>
+
+    <!-- Messages / Action Stream -->
+    <main class="chat-container" id="chat-container">
+      <div class="welcome-box" id="welcome-box">
+        <h3>Autonomous Browser Copilot</h3>
+        <p>Give me any web task. I'll inspect the page, click buttons, fill forms, and report back.</p>
+        <div class="suggestions">
+          <button class="suggestion-chip" data-prompt="Search for the latest AI news and summarize top 3 headlines">
+            📰 Search latest AI news
+          </button>
+          <button class="suggestion-chip" data-prompt="Find the search bar on this page and search for 'best wireless headphones'">
+            🔍 Search on this site
+          </button>
+          <button class="suggestion-chip" data-prompt="Summarize the main content of this webpage">
+            📄 Summarize page
+          </button>
+        </div>
+      </div>
+    </main>
+
+    <!-- Input Bar -->
+    <footer class="input-bar">
+      <div class="input-wrapper">
+        <textarea id="prompt-input" placeholder="Ask WebCopilot to do something on this tab..." rows="1"></textarea>
+        <div class="button-group">
+          <button id="btn-stop" class="action-btn stop-btn hidden" title="Stop Agent">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+            </svg>
+          </button>
+          <button id="btn-send" class="action-btn send-btn" title="Send Task">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal hidden" id="settings-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Agent Settings</h3>
+        <button id="btn-close-settings" class="icon-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="setting-provider">AI Provider</label>
+          <select id="setting-provider">
+            <option value="gemini">Google Gemini (Free API)</option>
+            <option value="ollama">Ollama (Local & Offline)</option>
+          </select>
+        </div>
+
+        <div id="gemini-settings">
+          <div class="form-group">
+            <label for="setting-api-key">Gemini API Key</label>
+            <input type="password" id="setting-api-key" placeholder="AIzaSy...">
+            <small>
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">
+                Get a 100% Free Gemini Key from Google AI Studio &rarr;
+              </a>
+            </small>
+          </div>
+
+          <div class="form-group">
+            <label for="setting-gemini-model">Gemini Model</label>
+            <select id="setting-gemini-model">
+              <option value="gemini-2.0-flash">gemini-2.0-flash (Fastest & Latest)</option>
+              <option value="gemini-1.5-flash">gemini-1.5-flash (Standard Free Tier)</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="ollama-settings" class="hidden">
+          <div class="form-group">
+            <label for="setting-ollama-url">Ollama Base URL</label>
+            <input type="text" id="setting-ollama-url" value="http://localhost:11434">
+          </div>
+          <div class="form-group">
+            <label for="setting-ollama-model">Ollama Model</label>
+            <input type="text" id="setting-ollama-model" value="llama3.2" placeholder="llama3.2 or qwen2.5">
+          </div>
+        </div>
+
+        <div class="form-group-checkbox">
+          <label>
+            <input type="checkbox" id="setting-show-badges" checked>
+            <span>Show [e1], [e2] badges on webpage</span>
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label for="setting-max-steps">Max Actions per Task</label>
+          <input type="number" id="setting-max-steps" value="15" min="1" max="30">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-settings" class="primary-btn">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

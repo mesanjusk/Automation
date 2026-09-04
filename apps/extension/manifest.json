@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "WebCopilot AI - Browser Automation Agent",
+  "version": "1.0.0",
+  "description": "Autonomous AI browser agent with Side Panel UI, powered by Free Gemini API or Local Ollama.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Open WebCopilot Agent"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+  "permissions": [
+    "sidePanel",
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}

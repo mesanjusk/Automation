@@ -1,0 +1,9 @@
+{
+  "name": "@bos/extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WebCopilot AI - Autonomous Browser Automation Chrome Extension (Manifest V3)",
+  "scripts": {
+    "typecheck": "node --check background.js content/probe.js content/executor.js sidepanel/sidepanel.js"
+  }
+}

@@ -322,6 +322,7 @@ async function callGemini(systemPrompt) {
     primaryModel,
     "gemini-3.6-flash",
     "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
     "gemini-3.1-pro-preview"
   ];
   const modelsToTry = candidateModels.filter((m, idx, self) => self.indexOf(m) === idx);
@@ -329,7 +330,7 @@ async function callGemini(systemPrompt) {
   let lastError = null;
 
   for (const model of modelsToTry) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
         const response = await fetch(url, {
@@ -346,10 +347,12 @@ async function callGemini(systemPrompt) {
 
         if (response.status === 503 || response.status === 429) {
           const errData = await response.json().catch(() => ({}));
-          const errMsg = errData?.error?.message || `HTTP ${response.status}`;
-          console.warn(`Model ${model} busy (${errMsg}). Retrying...`);
-          setStatus(`Model busy, retrying...`, "thinking");
-          await new Promise(r => setTimeout(r, 2000));
+          const errMsg = errData?.error?.message || `Server busy (HTTP ${response.status})`;
+          lastError = new Error(errMsg);
+          const delay = attempt * 2000;
+          console.warn(`Model ${model} busy (${errMsg}). Retrying in ${delay / 1000}s (attempt ${attempt}/3)...`);
+          setStatus(`Server busy, retrying in ${delay / 1000}s...`, "thinking");
+          await new Promise(r => setTimeout(r, delay));
           continue;
         }
 
@@ -363,10 +366,9 @@ async function callGemini(systemPrompt) {
             throw new Error(msg);
           }
 
-          // If model is busy, retired, not available, or quota reached, advance to next model
           setStatus(`Switching model...`, "thinking");
           await new Promise(r => setTimeout(r, 1000));
-          break; // Break attempt loop to try next model in modelsToTry
+          break; // Try next model in list
         }
 
         const data = await response.json();
@@ -380,12 +382,15 @@ async function callGemini(systemPrompt) {
           throw err;
         }
         await new Promise(r => setTimeout(r, 1000));
-        break; // Advance to next model
+        break;
       }
     }
   }
 
-  throw lastError || new Error("Failed to get response from Gemini API after fallback attempts.");
+  const finalMessage = lastError?.message
+    ? `Google AI servers are experiencing temporary high demand: "${lastError.message}". Please wait 10-15 seconds and try again.`
+    : "Google AI servers are experiencing temporary high demand. Please wait a few seconds and try again.";
+  throw new Error(finalMessage);
 }
 
 async function callOllama(systemPrompt) {

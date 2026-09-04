@@ -33,6 +33,12 @@
     const el = findTargetInput(targetEl);
     el.focus();
 
+    // 1. Synthetic mouse clicks to ensure active editing state in rich editors
+    const clickOpts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new MouseEvent("mousedown", clickOpts));
+    el.dispatchEvent(new MouseEvent("mouseup", clickOpts));
+    el.dispatchEvent(new MouseEvent("click", clickOpts));
+
     const tag = el.tagName.toLowerCase();
     const isInputOrTextarea = tag === "input" || tag === "textarea";
     const isContentEditable = el.isContentEditable || el.getAttribute("contenteditable") !== null || el.getAttribute("role") === "textbox";
@@ -40,36 +46,68 @@
     if (isContentEditable && !isInputOrTextarea) {
       el.focus();
 
-      // Select existing content
+      // Clear existing content
       const selection = window.getSelection();
       const range = document.createRange();
       range.selectNodeContents(el);
       selection.removeAllRanges();
       selection.addRange(range);
 
-      let success = false;
+      // Strategy A: Synthetic Clipboard paste event (Google Flow, Lexical, Slate catch this instantly)
       try {
-        success = document.execCommand("insertText", false, value);
-      } catch (e) {
-        success = false;
+        const dt = new DataTransfer();
+        dt.setData("text/plain", value);
+        const pasteEvt = new ClipboardEvent("paste", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clipboardData: dt
+        });
+        el.dispatchEvent(pasteEvt);
+      } catch (e) {}
+
+      // Strategy B: document.execCommand
+      try {
+        document.execCommand("insertText", false, value);
+      } catch (e) {}
+
+      // Strategy C: Comprehensive InputEvents
+      const inputEventInit = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        inputType: "insertText",
+        data: value
+      };
+      el.dispatchEvent(new InputEvent("beforeinput", inputEventInit));
+
+      if (!el.innerText || el.innerText.trim() !== value.trim()) {
+        el.innerText = value;
       }
 
-      if (!success || el.innerText.trim() !== value.trim()) {
-        el.dispatchEvent(new InputEvent("beforeinput", {
-          bubbles: true,
-          cancelable: true,
-          inputType: "insertText",
-          data: value
-        }));
-        el.innerText = value;
-        el.dispatchEvent(new InputEvent("input", {
-          bubbles: true,
-          cancelable: true,
-          inputType: "insertText",
-          data: value
-        }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      }
+      el.dispatchEvent(new InputEvent("input", inputEventInit));
+      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+      // Strategy D: Key events (many Google apps re-check input state on keyup)
+      const keyInit = { key: " ", code: "Space", keyCode: 32, which: 32, bubbles: true, cancelable: true, composed: true };
+      el.dispatchEvent(new KeyboardEvent("keydown", keyInit));
+      el.dispatchEvent(new KeyboardEvent("keyup", keyInit));
+
+      // Strategy E: Unlock any nearby submit buttons that might be waiting for input state
+      setTimeout(() => {
+        const container = el.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar']") || el.parentElement?.parentElement;
+        if (container) {
+          container.querySelectorAll("button, [role='button']").forEach(btn => {
+            if (btn.disabled || btn.getAttribute("aria-disabled") === "true") {
+              btn.disabled = false;
+              btn.removeAttribute("disabled");
+              btn.removeAttribute("aria-disabled");
+              btn.classList.remove("disabled");
+            }
+          });
+        }
+      }, 100);
+
       return;
     }
 
@@ -82,9 +120,13 @@
       el.value = value;
     }
 
-    el.dispatchEvent(new Event("beforeinput", { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new Event("beforeinput", { bubbles: true, cancelable: true, composed: true }));
+    el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true, composed: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true, composed: true }));
+
+    const keyInit = { key: " ", code: "Space", keyCode: 32, which: 32, bubbles: true, cancelable: true, composed: true };
+    el.dispatchEvent(new KeyboardEvent("keydown", keyInit));
+    el.dispatchEvent(new KeyboardEvent("keyup", keyInit));
   }
 
   async function executeAction(actionRequest) {
@@ -146,10 +188,14 @@
           // If in a prompt composer (like Google Flow, ChatGPT, Claude), check for a send arrow button nearby
           const composer = activeEl.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar']") || activeEl.parentElement?.parentElement;
           if (composer) {
-            const sendBtn = composer.querySelector("button:not([disabled]) svg, button[type='submit'], [role='button']:not([disabled])");
+            const sendBtn = composer.querySelector("button svg, button, [role='button']");
             if (sendBtn) {
               const btn = sendBtn.tagName === "svg" ? (sendBtn.closest("button") || sendBtn.closest("[role='button']")) : sendBtn;
               if (btn && btn !== activeEl) {
+                btn.disabled = false;
+                btn.removeAttribute("disabled");
+                btn.removeAttribute("aria-disabled");
+                btn.classList.remove("disabled");
                 btn.click();
               }
             }
@@ -176,8 +222,16 @@
       flashHighlight(el, "webcopilot-highlight-click");
       el.focus();
 
+      // If button has disabled attribute or aria-disabled, un-disable it before clicking
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") {
+        el.disabled = false;
+        el.removeAttribute("disabled");
+        el.removeAttribute("aria-disabled");
+        el.classList.remove("disabled");
+      }
+
       // Dispatch realistic mouse sequence
-      const mouseOpts = { bubbles: true, cancelable: true, view: window };
+      const mouseOpts = { bubbles: true, cancelable: true, view: window, composed: true };
       el.dispatchEvent(new PointerEvent("pointerdown", mouseOpts));
       el.dispatchEvent(new MouseEvent("mousedown", mouseOpts));
       el.dispatchEvent(new PointerEvent("pointerup", mouseOpts));

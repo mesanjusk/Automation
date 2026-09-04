@@ -14,7 +14,7 @@ const DEFAULT_SETTINGS = {
   ollamaUrl: "http://localhost:11434",
   ollamaModel: "llama3.2",
   showBadges: true,
-  maxSteps: 30
+  maxSteps: 0 // 0 = Unlimited until completed or stopped
 };
 
 let settings = { ...DEFAULT_SETTINGS };
@@ -62,8 +62,12 @@ async function loadSettings() {
       settings.geminiModel?.includes("pro")
     ) {
       settings.geminiModel = "gemini-2.5-flash";
-      await chrome.storage.local.set({ webcopilot_settings: settings });
     }
+    // Auto-migrate old step limits (15, 30, or undefined) to 0 (Unlimited)
+    if (settings.maxSteps === 15 || settings.maxSteps === 30 || settings.maxSteps === undefined) {
+      settings.maxSteps = 0;
+    }
+    await chrome.storage.local.set({ webcopilot_settings: settings });
   }
   populateSettingsUI();
 }
@@ -75,7 +79,7 @@ function populateSettingsUI() {
   settingOllamaUrl.value = settings.ollamaUrl;
   settingOllamaModel.value = settings.ollamaModel;
   settingShowBadges.checked = settings.showBadges;
-  settingMaxSteps.value = settings.maxSteps;
+  settingMaxSteps.value = settings.maxSteps !== undefined ? settings.maxSteps : 0;
 
   if (settings.provider === "gemini") {
     geminiSettingsGroup.classList.remove("hidden");
@@ -93,7 +97,8 @@ async function saveSettings() {
   settings.ollamaUrl = settingOllamaUrl.value.trim() || "http://localhost:11434";
   settings.ollamaModel = settingOllamaModel.value.trim() || "llama3.2";
   settings.showBadges = settingShowBadges.checked;
-  settings.maxSteps = parseInt(settingMaxSteps.value, 10) || 15;
+  const parsedSteps = parseInt(settingMaxSteps.value, 10);
+  settings.maxSteps = isNaN(parsedSteps) || parsedSteps < 0 ? 0 : parsedSteps;
 
   await chrome.storage.local.set({ webcopilot_settings: settings });
   settingsModal.classList.add("hidden");
@@ -268,8 +273,10 @@ async function ensureExecutorInjected(tabId) {
 // --- LLM API Callers ---
 
 function buildSystemPrompt(task, snapshot, history, outcome) {
-  const historyText = history.length > 0
-    ? history.map((h, i) => `${i + 1}. [${h.action}] on [${h.ref || "none"}] -> ${h.detail || h.reason}`).join("\n")
+  const recentHistory = history.slice(-15);
+  const historyText = recentHistory.length > 0
+    ? (history.length > 15 ? `... (${history.length - 15} earlier actions completed)\n` : "") +
+      recentHistory.map((h, i) => `${history.length - recentHistory.length + i + 1}. [${h.action}] on [${h.ref || "none"}] -> ${h.detail || h.reason}`).join("\n")
     : "(No actions taken yet)";
 
   const outcomeText = outcome
@@ -548,15 +555,16 @@ async function startAgentTask() {
   currentTabId = tab.id;
 
   let stepCount = 0;
-  const maxSteps = settings.maxSteps || 15;
+  const maxSteps = typeof settings.maxSteps === "number" ? settings.maxSteps : 0;
+  const isUnlimited = maxSteps <= 0;
   let prevUrl = tab.url;
 
   try {
     await ensureExecutorInjected(currentTabId);
 
-    while (isRunning && stepCount < maxSteps) {
+    while (isRunning && (isUnlimited || stepCount < maxSteps)) {
       stepCount++;
-      setStatus(`Thinking (Step ${stepCount})...`, "thinking");
+      setStatus(`Thinking (Step ${stepCount}${isUnlimited ? "" : `/${maxSteps}`})...`, "thinking");
 
       // 1. Sense: Probe current page
       let snapshot;
@@ -609,7 +617,7 @@ async function startAgentTask() {
       }
 
       // Action execution
-      setStatus(`Acting (Step ${stepCount})...`, "acting");
+      setStatus(`Acting (Step ${stepCount}${isUnlimited ? "" : `/${maxSteps}`})...`, "acting");
       let actionDetail = "";
       if (decision.action === "click") actionDetail = `Click [${decision.ref}]`;
       else if (decision.action === "type") actionDetail = `Type "${decision.value}" into [${decision.ref}]`;
@@ -710,7 +718,7 @@ async function startAgentTask() {
       await new Promise(r => setTimeout(r, 1200));
     }
 
-    if (stepCount >= maxSteps && isRunning) {
+    if (!isUnlimited && stepCount >= maxSteps && isRunning) {
       appendAgentMessage(`⏱️ Reached maximum limit of ${maxSteps} steps. You can provide another instruction to continue.`);
       await runActionExecutor(currentTabId, { action: "clearBadges" });
     }

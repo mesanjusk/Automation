@@ -17,10 +17,11 @@
     if (rect.width <= 2 || rect.height <= 2) return false;
 
     const style = window.getComputedStyle(el);
+    const isInput = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
     if (
       style.display === "none" ||
       style.visibility === "hidden" ||
-      style.opacity === "0" ||
+      (!isInput && style.opacity === "0") ||
       style.pointerEvents === "none"
     ) {
       return false;
@@ -54,15 +55,15 @@
     // Check for button labeling in prompt composers or with icon/SVG
     if (el.tagName === "BUTTON" || el.getAttribute("role") === "button") {
       const textVal = (el.innerText || el.textContent || "").trim();
-      if (/arrow|send|submit|forward|generate|play/i.test(textVal) || /[→➜➔►>]/.test(textVal)) {
+      if (/arrow|send|submit|forward|generate|play|create/i.test(textVal) || /[→➜➔►>]/.test(textVal)) {
         return "Submit / Send prompt button";
       }
-      const svg = el.querySelector("svg");
+      const svg = el.querySelector("svg, i, span");
       if (svg) {
         const svgAria = svg.getAttribute("aria-label") || svg.getAttribute("title");
         if (svgAria) return cleanText(svgAria);
         const allAttrs = `${el.className || ""} ${el.id || ""} ${svg.getAttribute("class") || ""}`;
-        if (/send|submit|arrow|enter|generate|forward/i.test(allAttrs)) {
+        if (/send|submit|arrow|enter|generate|forward|create/i.test(allAttrs)) {
           return "Submit / Send prompt button";
         }
         if (el.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar']")) {
@@ -135,6 +136,16 @@
       // Skip elements inside our own badge container
       if (el.closest(`#${BADGE_CONTAINER_ID}`)) continue;
 
+      const tag = el.tagName.toLowerCase();
+
+      // Skip container wrappers if they enclose an actual editable element
+      if (tag === "div" || tag === "section" || tag === "main" || tag === "form") {
+        const childInput = el.querySelector("textarea, input:not([type='hidden']), [contenteditable='true']");
+        if (childInput && childInput !== el) {
+          continue;
+        }
+      }
+
       const rect = el.getBoundingClientRect();
       const inViewport = (
         rect.top < vpHeight &&
@@ -153,7 +164,6 @@
       }
       counter++;
 
-      const tag = el.tagName.toLowerCase();
       const type = (el.getAttribute("type") || "").toLowerCase();
       const role = el.getAttribute("role") || (tag === "a" ? "link" : tag === "button" ? "button" : (tag === "input" ? "input" : tag));
       const label = getElementLabel(el);
@@ -161,8 +171,8 @@
         tag === "textarea" ||
         (tag === "input" && !["button", "submit", "reset", "checkbox", "radio", "file"].includes(type)) ||
         el.isContentEditable ||
-        el.getAttribute("contenteditable") !== null ||
-        role === "textbox"
+        el.getAttribute("contenteditable") === "true" ||
+        (role === "textbox" && !el.querySelector("textarea, input, [contenteditable='true']"))
       );
       const currentValue = isEditable ? (el.value !== undefined && el.value !== "" ? el.value : el.innerText || "") : null;
       const isDisabled = el.disabled || el.getAttribute("aria-disabled") === "true";

@@ -21,112 +21,141 @@
 
   function findTargetInput(targetEl) {
     if (!targetEl) return null;
-    if (targetEl.tagName === "INPUT" || targetEl.tagName === "TEXTAREA" || targetEl.isContentEditable) {
+
+    // 1. If targetEl itself is directly an input or textarea
+    if (targetEl.tagName === "INPUT" || targetEl.tagName === "TEXTAREA") {
       return targetEl;
     }
-    const inner = targetEl.querySelector("input, textarea, [contenteditable='true'], [contenteditable=''], [contenteditable='plaintext-only'], [role='textbox']");
+
+    // 2. If targetEl itself is contenteditable
+    if (targetEl.isContentEditable || targetEl.getAttribute("contenteditable") === "true") {
+      return targetEl;
+    }
+
+    // 3. Search inside targetEl for real editable element
+    const inner = targetEl.querySelector("textarea, input:not([type='hidden']), [contenteditable='true']");
     if (inner) return inner;
+
+    // 4. Search in siblings and parent
+    const parent = targetEl.parentElement;
+    if (parent) {
+      const sibling = parent.querySelector("textarea, input:not([type='hidden']), [contenteditable='true']");
+      if (sibling && sibling !== targetEl) return sibling;
+    }
+
+    // 5. Search closest composer or form
+    const composer = (targetEl.closest && targetEl.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='search'], form, main")) || parent?.parentElement;
+    if (composer) {
+      const compInput = composer.querySelector("textarea, input:not([type='hidden']), [contenteditable='true']");
+      if (compInput && compInput !== targetEl) return compInput;
+    }
+
     return targetEl;
   }
 
   function setElementValue(targetEl, value) {
     const el = findTargetInput(targetEl);
-    el.focus();
+    if (!el) return;
 
-    // 1. Synthetic mouse clicks to ensure active editing state in rich editors
-    const clickOpts = { bubbles: true, cancelable: true, view: window };
-    el.dispatchEvent(new MouseEvent("mousedown", clickOpts));
-    el.dispatchEvent(new MouseEvent("mouseup", clickOpts));
-    el.dispatchEvent(new MouseEvent("click", clickOpts));
+    // Focus and click the element to initialize rich editors
+    try {
+      el.focus();
+      const clickOpts = { bubbles: true, cancelable: true, view: window };
+      el.dispatchEvent(new MouseEvent("mousedown", clickOpts));
+      el.dispatchEvent(new MouseEvent("mouseup", clickOpts));
+      el.dispatchEvent(new MouseEvent("click", clickOpts));
+    } catch (e) {}
 
     const tag = el.tagName.toLowerCase();
     const isInputOrTextarea = tag === "input" || tag === "textarea";
-    const isContentEditable = el.isContentEditable || el.getAttribute("contenteditable") !== null || el.getAttribute("role") === "textbox";
+    const isContentEditable = el.isContentEditable || el.getAttribute("contenteditable") === "true" || el.getAttribute("role") === "textbox";
 
-    if (isContentEditable && !isInputOrTextarea) {
-      el.focus();
+    if (isInputOrTextarea) {
+      // Clear selection
+      try { el.select(); } catch (e) {}
 
-      // Clear existing content
-      const selection = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      selection.removeAllRanges();
-      selection.addRange(range);
-
-      // Strategy A: Synthetic Clipboard paste event (Google Flow, Lexical, Slate catch this instantly)
-      try {
-        const dt = new DataTransfer();
-        dt.setData("text/plain", value);
-        const pasteEvt = new ClipboardEvent("paste", {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          clipboardData: dt
-        });
-        el.dispatchEvent(pasteEvt);
-      } catch (e) {}
-
-      // Strategy B: document.execCommand
-      try {
-        document.execCommand("insertText", false, value);
-      } catch (e) {}
-
-      // Strategy C: Comprehensive InputEvents
-      const inputEventInit = {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        inputType: "insertText",
-        data: value
-      };
-      el.dispatchEvent(new InputEvent("beforeinput", inputEventInit));
-
-      if (!el.innerText || el.innerText.trim() !== value.trim()) {
-        el.innerText = value;
+      // Prototype setter to bypass React/Angular/Wiz getter/setter overrides
+      const proto = tag === "textarea" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      if (setter) {
+        setter.call(el, value);
+      } else {
+        el.value = value;
       }
 
-      el.dispatchEvent(new InputEvent("input", inputEventInit));
-      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      el.dispatchEvent(new Event("beforeinput", { bubbles: true, cancelable: true, composed: true }));
+      el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true, composed: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true, composed: true }));
+    } else if (isContentEditable) {
+      // Rich text editors (Lexical, ProseMirror, Slate, Draft.js, Google Flow)
+      try {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (e) {}
 
-      // Strategy D: Key events (many Google apps re-check input state on keyup)
-      const keyInit = { key: " ", code: "Space", keyCode: 32, which: 32, bubbles: true, cancelable: true, composed: true };
-      el.dispatchEvent(new KeyboardEvent("keydown", keyInit));
-      el.dispatchEvent(new KeyboardEvent("keyup", keyInit));
+      // Strategy A: Native execCommand delete then insertText
+      let execSuccess = false;
+      try {
+        document.execCommand("delete", false, null);
+        execSuccess = document.execCommand("insertText", false, value);
+      } catch (e) {
+        execSuccess = false;
+      }
 
-      // Strategy E: Unlock any nearby submit buttons that might be waiting for input state
-      setTimeout(() => {
-        const container = el.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar']") || el.parentElement?.parentElement;
-        if (container) {
-          container.querySelectorAll("button, [role='button']").forEach(btn => {
-            if (btn.disabled || btn.getAttribute("aria-disabled") === "true") {
-              btn.disabled = false;
-              btn.removeAttribute("disabled");
-              btn.removeAttribute("aria-disabled");
-              btn.classList.remove("disabled");
-            }
+      // Strategy B: Synthetic Clipboard paste event if execCommand was not handled
+      if (!execSuccess || !el.textContent || !el.textContent.includes(value.slice(0, 10))) {
+        try {
+          const dt = new DataTransfer();
+          dt.setData("text/plain", value);
+          const pasteEvt = new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            clipboardData: dt
           });
-        }
-      }, 100);
+          el.dispatchEvent(pasteEvt);
+        } catch (e) {}
+      }
 
-      return;
-    }
+      // Strategy C: Dispatch InputEvent and populate text node cleanly
+      const inputInit = { bubbles: true, cancelable: true, composed: true, inputType: "insertText", data: value };
+      el.dispatchEvent(new InputEvent("beforeinput", inputInit));
 
-    const proto = tag === "textarea" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      if (!el.textContent || !el.textContent.includes(value.slice(0, 10))) {
+        const p = el.querySelector("p, span") || el;
+        p.textContent = value;
+      }
 
-    if (setter) {
-      setter.call(el, value);
+      el.dispatchEvent(new InputEvent("input", inputInit));
+      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     } else {
-      el.value = value;
+      // Check if clicking focused a real input
+      const active = document.activeElement;
+      if (active && active !== el && (active.tagName === "TEXTAREA" || active.tagName === "INPUT" || active.isContentEditable)) {
+        return setElementValue(active, value);
+      }
     }
 
-    el.dispatchEvent(new Event("beforeinput", { bubbles: true, cancelable: true, composed: true }));
-    el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true, composed: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true, composed: true }));
-
+    // Key events to trigger reactive framework state watchers
     const keyInit = { key: " ", code: "Space", keyCode: 32, which: 32, bubbles: true, cancelable: true, composed: true };
     el.dispatchEvent(new KeyboardEvent("keydown", keyInit));
     el.dispatchEvent(new KeyboardEvent("keyup", keyInit));
+
+    // Re-enable any submit button in the composer
+    const composer = (el.closest && el.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar'], form")) || el.parentElement?.parentElement;
+    if (composer) {
+      setTimeout(() => {
+        composer.querySelectorAll("button, [role='button']").forEach(btn => {
+          btn.disabled = false;
+          btn.removeAttribute("disabled");
+          btn.removeAttribute("aria-disabled");
+          btn.classList.remove("disabled");
+        });
+      }, 60);
+    }
   }
 
   async function executeAction(actionRequest) {
@@ -155,9 +184,17 @@
     }
 
     if (action === "press") {
-      const activeEl = (ref ? findElementByRef(ref) : document.activeElement) || document.body;
-      const keyName = key || value || "Enter";
+      let activeEl = ref ? findElementByRef(ref) : document.activeElement;
+      if (!activeEl || activeEl === document.body) {
+        activeEl = document.querySelector("textarea:focus, input:focus, [contenteditable='true']:focus")
+          || document.querySelector("textarea, [contenteditable='true'], [role='textbox']")
+          || document.body;
+      }
+      if (activeEl) {
+        try { activeEl.focus(); } catch (e) {}
+      }
 
+      const keyName = key || value || "Enter";
       const eventInit = {
         key: keyName,
         code: keyName === "Enter" ? "Enter" : keyName,
@@ -174,31 +211,20 @@
       activeEl.dispatchEvent(new KeyboardEvent("keypress", eventInit));
       activeEl.dispatchEvent(new KeyboardEvent("keyup", eventInit));
 
-      // If pressing Enter in a form, input, or contenteditable prompt bar:
+      // If pressing Enter in a form, input, or prompt composer:
       if (keyName === "Enter") {
-        const form = activeEl.closest("form");
-        if (form) {
-          const submitBtn = form.querySelector("button[type='submit'], input[type='submit']");
-          if (submitBtn) {
-            submitBtn.click();
-          } else {
-            form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-          }
-        } else {
-          // If in a prompt composer (like Google Flow, ChatGPT, Claude), check for a send arrow button nearby
-          const composer = activeEl.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar']") || activeEl.parentElement?.parentElement;
-          if (composer) {
-            const sendBtn = composer.querySelector("button svg, button, [role='button']");
-            if (sendBtn) {
-              const btn = sendBtn.tagName === "svg" ? (sendBtn.closest("button") || sendBtn.closest("[role='button']")) : sendBtn;
-              if (btn && btn !== activeEl) {
-                btn.disabled = false;
-                btn.removeAttribute("disabled");
-                btn.removeAttribute("aria-disabled");
-                btn.classList.remove("disabled");
-                btn.click();
-              }
-            }
+        const composer = (activeEl.closest && activeEl.closest("[class*='prompt'], [class*='composer'], [class*='input'], [class*='bar'], form"))
+          || activeEl.parentElement?.parentElement
+          || document.querySelector("[class*='prompt'], [class*='composer']");
+
+        if (composer) {
+          const sendBtn = composer.querySelector("button[type='submit'], button[aria-label*='Send'], button[aria-label*='Create'], button[aria-label*='generate'], button:has(svg), button");
+          if (sendBtn && sendBtn !== activeEl) {
+            sendBtn.disabled = false;
+            sendBtn.removeAttribute("disabled");
+            sendBtn.removeAttribute("aria-disabled");
+            sendBtn.classList.remove("disabled");
+            sendBtn.click();
           }
         }
       }
@@ -230,12 +256,21 @@
         el.classList.remove("disabled");
       }
 
-      // Dispatch realistic mouse sequence
+      // Dispatch realistic mouse & pointer sequence to both el and child icon/svg
+      const targets = [el];
+      const child = el.querySelector("svg, i, span, img, path");
+      if (child) targets.push(child);
+
       const mouseOpts = { bubbles: true, cancelable: true, view: window, composed: true };
-      el.dispatchEvent(new PointerEvent("pointerdown", mouseOpts));
-      el.dispatchEvent(new MouseEvent("mousedown", mouseOpts));
-      el.dispatchEvent(new PointerEvent("pointerup", mouseOpts));
-      el.dispatchEvent(new MouseEvent("mouseup", mouseOpts));
+      const pointerOpts = { bubbles: true, cancelable: true, view: window, composed: true, pointerType: "mouse", isPrimary: true };
+
+      for (const t of targets) {
+        t.dispatchEvent(new PointerEvent("pointerdown", pointerOpts));
+        t.dispatchEvent(new MouseEvent("mousedown", mouseOpts));
+        t.dispatchEvent(new PointerEvent("pointerup", pointerOpts));
+        t.dispatchEvent(new MouseEvent("mouseup", mouseOpts));
+        t.dispatchEvent(new MouseEvent("click", mouseOpts));
+      }
       el.click();
 
       return {

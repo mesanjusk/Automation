@@ -10,7 +10,7 @@ let lastOutcome = null;
 const DEFAULT_SETTINGS = {
   provider: "gemini",
   apiKey: "",
-  geminiModel: "gemini-2.0-flash",
+  geminiModel: "gemini-3.6-flash",
   ollamaUrl: "http://localhost:11434",
   ollamaModel: "llama3.2",
   showBadges: true,
@@ -55,6 +55,11 @@ async function loadSettings() {
   const stored = await chrome.storage.local.get("webcopilot_settings");
   if (stored.webcopilot_settings) {
     settings = { ...DEFAULT_SETTINGS, ...stored.webcopilot_settings };
+    // Auto-migrate retired models
+    if (settings.geminiModel === "gemini-2.0-flash" || settings.geminiModel === "gemini-1.5-flash") {
+      settings.geminiModel = "gemini-3.6-flash";
+      await chrome.storage.local.set({ webcopilot_settings: settings });
+    }
   }
   populateSettingsUI();
 }
@@ -80,7 +85,7 @@ function populateSettingsUI() {
 async function saveSettings() {
   settings.provider = settingProvider.value;
   settings.apiKey = settingApiKey.value.trim();
-  settings.geminiModel = settingGeminiModel.value;
+  settings.geminiModel = settingGeminiModel.value.trim() || "gemini-3.6-flash";
   settings.ollamaUrl = settingOllamaUrl.value.trim() || "http://localhost:11434";
   settings.ollamaModel = settingOllamaModel.value.trim() || "llama3.2";
   settings.showBadges = settingShowBadges.checked;
@@ -312,7 +317,7 @@ Respond ONLY with a valid JSON object matching this exact schema:
 }
 
 async function callGemini(systemPrompt) {
-  const model = settings.geminiModel || "gemini-2.0-flash";
+  const model = settings.geminiModel || "gemini-3.6-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`;
 
   const response = await fetch(url, {

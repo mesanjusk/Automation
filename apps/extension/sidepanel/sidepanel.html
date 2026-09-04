@@ -108,10 +108,12 @@
 
           <div class="form-group">
             <label for="setting-gemini-model">Gemini Model</label>
-            <select id="setting-gemini-model">
-              <option value="gemini-2.0-flash">gemini-2.0-flash (Fastest & Latest)</option>
-              <option value="gemini-1.5-flash">gemini-1.5-flash (Standard Free Tier)</option>
-            </select>
+            <input list="gemini-models" id="setting-gemini-model" value="gemini-3.6-flash" placeholder="gemini-3.6-flash">
+            <datalist id="gemini-models">
+              <option value="gemini-3.6-flash">gemini-3.6-flash (Recommended / Latest)</option>
+              <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+            </datalist>
           </div>
         </div>
 

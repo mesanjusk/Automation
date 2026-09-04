@@ -25,6 +25,7 @@
     "seed:demo": "tsx scripts/seed-demo.ts",
     "login-helper": "tsx scripts/login-helper.ts",
     "connect-browser": "tsx scripts/connect-browser.ts",
+    "chrome": "tsx scripts/chrome-session.ts",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {

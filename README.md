@@ -117,6 +117,16 @@ your own Docker host). They only share MongoDB and Redis.
   site's own confirmation appears (or a spinner's text disappears), which is
   both faster than a guessed sleep when the site is quick and correct when it
   is slow.
+- **Attaching to your own Chrome** — set `BROWSER_CDP_URL` and the worker joins
+  a Chrome you started and signed in to yourself instead of launching its own.
+  This is the way past Google's *"this browser or app may not be secure"*, which
+  refuses the Google sign-in flow inside an automated browser. The fix is not to
+  make automation look less automated — that is fragile, and it is the wrong
+  thing to do to somebody's security check. It is to stop signing in inside
+  automation at all: `npm run chrome` starts your real Chrome with a DevTools
+  port, you sign in normally, and the run attaches to the browser you are
+  already signed in to. The session it attaches to is yours, so the worker
+  detaches at the end rather than closing your window.
 - **Signing in stays human** — `WAIT_FOR_LOGIN` opens the sites a run needs an
   account on, then blocks *inside the run* at the worker's terminal until the
   person says they are done, and continues in that same window. This is not the
@@ -154,7 +164,10 @@ your own Docker host). They only share MongoDB and Redis.
   polling MongoDB — no Redis, so cloud/Render automations are unaffected.
   The run opens ChatGPT and Google Flow, waits at the worker's terminal for you
   to sign in to both, and then reuses those exact tabs — which is why it needs
-  `PLAYWRIGHT_HEADLESS=false` and a worker you can type into.
+  `PLAYWRIGHT_HEADLESS=false` and a worker you can type into. If Google blocks
+  the sign-in with *"this browser or app may not be secure"*, run `npm run
+  chrome` and point `BROWSER_CDP_URL` at it: sign in there, in your real
+  Chrome, and the worker attaches to that instead of launching its own.
   Reading the plan is split in three: a page script that only *waits* (keyed on
   ChatGPT's own stop-streaming and copy-message controls, so a reply that pauses
   mid-thought is not mistaken for a finished one), `PARSE_JSON`, and — if the
@@ -223,13 +236,13 @@ environments.
 npm test
 ```
 
-252 unit/integration tests cover workflow validation, the self-healing
+257 unit/integration tests cover workflow validation, the self-healing
 selector fallback chain (including ref binding, stale-ref recovery and iframe
 scoping), page-snapshot rendering and change detection, the agent tool
 adapter and its safety checks, the agent prompt contract, the retry/backoff
 policy, the engine's control flow (branching, loops, human-approval pausing,
 cancellation, the repeated-action guard, `PARSE_JSON` and its repairs), the
-manual sign-in gate, the
+manual sign-in gate, attaching to an already-running Chrome, the
 lenient JSON reader on its own, the Video Studio mission builder, BullMQ job
 shaping, request-schema validation for the public API, and webhook HMAC
 signing.

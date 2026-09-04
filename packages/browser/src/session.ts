@@ -44,10 +44,19 @@ export class BrowserSession {
    * for them to act in, and say so plainly when there is not.
    */
   readonly headless: boolean;
+  /**
+   * True when this session attached to a browser somebody else started, rather
+   * than launching one. That browser is theirs: its tabs, its history and its
+   * signed-in accounts, so the session must never close it on the way out.
+   */
+  readonly connected: boolean;
+  private connectedBrowser: Browser | undefined;
 
-  private constructor(context: BrowserContext, initialPage: Page, headless: boolean) {
+  private constructor(context: BrowserContext, initialPage: Page, headless: boolean, connectedBrowser?: Browser) {
     this.context = context;
     this.headless = headless;
+    this.connected = connectedBrowser !== undefined;
+    this.connectedBrowser = connectedBrowser;
     this.tabs = [];
     this.track(initialPage);
     context.on("page", (page) => this.track(page));
@@ -90,6 +99,43 @@ export class BrowserSession {
     context.setDefaultTimeout(30_000);
     const page = await context.newPage();
     return new BrowserSession(context, page, isHeadless());
+  }
+
+  /**
+   * Attaches to a Chrome the person already started and signed in to.
+   *
+   * This is the answer to Google's "this browser or app may not be secure",
+   * which refuses the sign-in flow inside an automated browser. Rather than
+   * trying to look less automated — which is both fragile and the wrong thing
+   * to do to somebody's security check — the sign-in simply stops happening
+   * inside automation at all: a person signs in normally, in their own Chrome,
+   * and the run attaches to the result.
+   *
+   * The existing context is reused deliberately. `newContext()` would hand back
+   * a blank, signed-out profile, which is exactly what this exists to avoid.
+   */
+  static async connect(cdpUrl: string): Promise<BrowserSession> {
+    const browser = await chromium.connectOverCDP(cdpUrl);
+    const context = browser.contexts()[0];
+    if (!context) {
+      await browser.close().catch(() => undefined);
+      throw new Error(
+        `Connected to Chrome at ${cdpUrl} but it exposed no browser context. ` +
+          "Open a normal window in that Chrome and try again."
+      );
+    }
+    context.setDefaultTimeout(30_000);
+    const open = context.pages().filter((page) => !page.isClosed());
+    const first = open[0] ?? (await context.newPage());
+    const session = new BrowserSession(context, first, false, browser);
+    // Adopt the tabs already open so switchTab/closeTab see the real window.
+    for (const page of open.slice(1)) session.adopt(page);
+    return session;
+  }
+
+  /** Tracks a tab that existed before this session attached. */
+  private adopt(page: Page): void {
+    this.track(page);
   }
 
   get activePage(): Page {
@@ -137,6 +183,13 @@ export class BrowserSession {
   }
 
   async close(): Promise<void> {
+    if (this.connectedBrowser) {
+      // Detach only. Closing the context here would shut the person's own tabs
+      // — including the ones they just signed in to — out from under them.
+      await this.connectedBrowser.close().catch(() => undefined);
+      this.connectedBrowser = undefined;
+      return;
+    }
     await this.context.close();
   }
 }

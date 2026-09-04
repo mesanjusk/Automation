@@ -54,27 +54,61 @@
   }
 
   function setElementValue(targetEl, value) {
-    const el = findTargetInput(targetEl);
-    if (!el) return;
+    if (!targetEl) return;
 
-    // Focus and click the element to initialize rich editors
+    // 1. Bring element into view
     try {
-      el.focus();
-      const clickOpts = { bubbles: true, cancelable: true, view: window };
-      el.dispatchEvent(new MouseEvent("mousedown", clickOpts));
-      el.dispatchEvent(new MouseEvent("mouseup", clickOpts));
-      el.dispatchEvent(new MouseEvent("click", clickOpts));
+      targetEl.scrollIntoView({ behavior: "smooth", block: "center" });
     } catch (e) {}
+
+    // 2. Find center coordinates and simulate realistic pointer/mouse click
+    const rect = targetEl.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const centerEl = (centerX > 0 && centerY > 0) ? document.elementFromPoint(centerX, centerY) : targetEl;
+    const clickTarget = centerEl || targetEl;
+
+    try {
+      const clickOpts = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: centerX,
+        clientY: centerY
+      };
+      clickTarget.dispatchEvent(new PointerEvent("pointerdown", { ...clickOpts, pointerType: "mouse", isPrimary: true }));
+      clickTarget.dispatchEvent(new MouseEvent("mousedown", clickOpts));
+      clickTarget.dispatchEvent(new PointerEvent("pointerup", { ...clickOpts, pointerType: "mouse", isPrimary: true }));
+      clickTarget.dispatchEvent(new MouseEvent("mouseup", clickOpts));
+      clickTarget.dispatchEvent(new MouseEvent("click", clickOpts));
+      clickTarget.focus();
+    } catch (e) {}
+
+    // 3. Resolve active input (if clicking activated a real input or shadow DOM element)
+    let el = findTargetInput(targetEl);
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    if (active && active !== document.body && (active.tagName === "TEXTAREA" || active.tagName === "INPUT" || active.isContentEditable)) {
+      el = active;
+    }
 
     const tag = el.tagName.toLowerCase();
     const isInputOrTextarea = tag === "input" || tag === "textarea";
     const isContentEditable = el.isContentEditable || el.getAttribute("contenteditable") === "true" || el.getAttribute("role") === "textbox";
 
     if (isInputOrTextarea) {
-      // Clear selection
-      try { el.select(); } catch (e) {}
+      // 1. Select all & try native execCommand insertText
+      try {
+        el.focus();
+        el.select();
+        document.execCommand("selectAll", false, null);
+        document.execCommand("delete", false, null);
+        document.execCommand("insertText", false, value);
+      } catch (e) {}
 
-      // Prototype setter to bypass React/Angular/Wiz getter/setter overrides
+      // 2. Prototype setter to bypass React/Angular/Wiz value trackers
       const proto = tag === "textarea" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
       if (setter) {
@@ -83,12 +117,14 @@
         el.value = value;
       }
 
+      // 3. Dispatch standard input events
       el.dispatchEvent(new Event("beforeinput", { bubbles: true, cancelable: true, composed: true }));
       el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true, composed: true }));
       el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true, composed: true }));
-    } else if (isContentEditable) {
+    } else {
       // Rich text editors (Lexical, ProseMirror, Slate, Draft.js, Google Flow)
       try {
+        el.focus();
         const sel = window.getSelection();
         const range = document.createRange();
         range.selectNodeContents(el);
@@ -105,25 +141,24 @@
         execSuccess = false;
       }
 
-      // Strategy B: Synthetic Clipboard paste event if execCommand was not handled
-      if (!execSuccess || !el.textContent || !el.textContent.includes(value.slice(0, 10))) {
-        try {
-          const dt = new DataTransfer();
-          dt.setData("text/plain", value);
-          const pasteEvt = new ClipboardEvent("paste", {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            clipboardData: dt
-          });
-          el.dispatchEvent(pasteEvt);
-        } catch (e) {}
-      }
+      // Strategy B: Synthetic Clipboard paste event (DataTransfer)
+      try {
+        const dt = new DataTransfer();
+        dt.setData("text/plain", value);
+        const pasteEvt = new ClipboardEvent("paste", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clipboardData: dt
+        });
+        el.dispatchEvent(pasteEvt);
+      } catch (e) {}
 
-      // Strategy C: Dispatch InputEvent and populate text node cleanly
+      // Strategy C: Dispatch InputEvent
       const inputInit = { bubbles: true, cancelable: true, composed: true, inputType: "insertText", data: value };
       el.dispatchEvent(new InputEvent("beforeinput", inputInit));
 
+      // Strategy D: Ensure text node exists inside paragraph if editor structure permits
       if (!el.textContent || !el.textContent.includes(value.slice(0, 10))) {
         const p = el.querySelector("p, span") || el;
         p.textContent = value;
@@ -131,15 +166,20 @@
 
       el.dispatchEvent(new InputEvent("input", inputInit));
       el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    } else {
-      // Check if clicking focused a real input
-      const active = document.activeElement;
-      if (active && active !== el && (active.tagName === "TEXTAREA" || active.tagName === "INPUT" || active.isContentEditable)) {
-        return setElementValue(active, value);
+    }
+
+    // Direct React props invocation if component uses React state
+    for (const k of Object.keys(el)) {
+      if (k.startsWith("__reactProps") || k.startsWith("__reactEventHandlers")) {
+        try {
+          const p = el[k];
+          if (p && typeof p.onChange === "function") p.onChange({ target: { value } });
+          if (p && typeof p.onInput === "function") p.onInput({ target: { value } });
+        } catch (e) {}
       }
     }
 
-    // Key events to trigger reactive framework state watchers
+    // Key events (Space) to notify reactive watchers in Angular/Wiz
     const keyInit = { key: " ", code: "Space", keyCode: 32, which: 32, bubbles: true, cancelable: true, composed: true };
     el.dispatchEvent(new KeyboardEvent("keydown", keyInit));
     el.dispatchEvent(new KeyboardEvent("keyup", keyInit));
@@ -154,7 +194,7 @@
           btn.removeAttribute("aria-disabled");
           btn.classList.remove("disabled");
         });
-      }, 60);
+      }, 80);
     }
   }
 

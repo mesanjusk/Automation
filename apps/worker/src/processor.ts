@@ -30,8 +30,21 @@ export async function processTaskJob(taskId: string): Promise<void> {
   const downloadDir = path.join(process.env.LOCAL_STORAGE_DIR || "./storage/local", "downloads", String(task._id)); await fs.mkdir(downloadDir, { recursive: true });
   let session: BrowserSession | null = null;
   try {
-    const storageState = profile?.encryptedStorageState ? decryptJSON(profile.encryptedStorageState) : undefined;
-    session = await BrowserSession.launch({ userAgent: profile?.userAgent, viewport: profile?.viewport, locale: profile?.locale, timezone: profile?.timezone, storageState });
+    // BROWSER_CDP_URL attaches to a Chrome the person already started and
+    // signed in to, instead of launching a fresh one. That is what makes
+    // Google Flow reachable at all: Google refuses its sign-in flow inside an
+    // automated browser ("this browser or app may not be secure"), so the
+    // sign-in happens in their own Chrome and the run joins it afterwards.
+    // The stored profile state is not injected in that mode — the live browser
+    // already holds the real session, and there is no blank context to seed.
+    const cdpUrl = process.env.BROWSER_CDP_URL?.trim();
+    if (cdpUrl) {
+      console.log(`[worker] attaching to the Chrome already running at ${cdpUrl}`);
+      session = await BrowserSession.connect(cdpUrl);
+    } else {
+      const storageState = profile?.encryptedStorageState ? decryptJSON(profile.encryptedStorageState) : undefined;
+      session = await BrowserSession.launch({ userAgent: profile?.userAgent, viewport: profile?.viewport, locale: profile?.locale, timezone: profile?.timezone, storageState });
+    }
     task.status = "RUNNING"; await task.save();
     const hooks = buildEngineHooks({ taskId: String(task._id), executionId: execution._id, session, browserAgentMode });
     const engine = new WorkflowEngine({

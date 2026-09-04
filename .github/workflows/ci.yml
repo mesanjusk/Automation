@@ -1,0 +1,65 @@
+name: CI
+
+# Runs the checks a contributor runs locally, on every pull request and on the
+# default branch. Without this the repo's own suite only ran when somebody
+# remembered to: a change once merged with seven failing tests because nothing
+# was watching, and stale tests asserting a design that had already been
+# replaced went unnoticed for several commits.
+#
+# Running on the default branch too is deliberate — it is what makes it
+# possible to tell "this PR broke it" from "it was already broken".
+
+on:
+  pull_request:
+  push:
+    # The repository's default branch. If the default is ever renamed (e.g. to
+    # main), update this or pushes to it stop being checked.
+    branches: [claude/browser-automation-os-hja2qd]
+
+# A new push supersedes the run already in flight for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: typecheck, test, build
+    runs-on: ubuntu-latest
+    # Generous: a cold npm cache dominates the run, the checks themselves
+    # take about a minute together.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # .npmrc sets engine-strict, and package.json requires Node >= 20:
+          # an older runtime fails the install outright rather than producing
+          # a subtly broken tree.
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium for the browser tests
+        # packages/browser/src/*.browser.test.ts drive a real headless
+        # Chromium. They skip themselves with a warning when no browser is
+        # available, so without this step they would pass while silently
+        # testing nothing.
+        run: npx playwright install --with-deps chromium
+
+      - name: Typecheck all workspaces
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        # Catches what typecheck cannot: the Next.js production build, which
+        # is where client/server boundary and bundling mistakes surface.
+        run: npm run build

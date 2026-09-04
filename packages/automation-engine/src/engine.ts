@@ -1,5 +1,5 @@
-import { executeBrowserAction, BROWSER_NODE_TYPES } from "@bos/browser";
-import { AutomationError, type AgentAction, type WorkflowNode } from "@bos/shared";
+import { executeBrowserAction, interpolate, BROWSER_NODE_TYPES } from "@bos/browser";
+import { AutomationError, parseLooseJson, type AgentAction, type WorkflowNode } from "@bos/shared";
 import { evaluateCondition, resolveVariablePath } from "./condition";
 import { withRetry } from "./retry";
 import { actionSignature, agentActionToWorkflowNode, isTerminalTool } from "./aiActionAdapter";
@@ -137,6 +137,64 @@ export class WorkflowEngine {
         return { next: node.next ?? null };
       }
 
+      case "PARSE_JSON": {
+        // Parsing a model's reply belongs here, in code that can be tested,
+        // rather than inside a page script where a stray quote takes the whole
+        // run down with it. The lenient parser repairs what it safely can and
+        // reports precisely what it could not, so a workflow can branch on the
+        // failure and ask for a better answer instead of dying.
+        const source = node.config.sourceVariable
+          ? resolveVariablePath(node.config.sourceVariable, state.variables)
+          : undefined;
+        const target = node.config.variableName ?? "parsed";
+        const text = typeof source === "string" ? source : source === undefined ? "" : JSON.stringify(source);
+        const result = parseLooseJson(text);
+
+        if (!result.ok) {
+          delete state.variables[target];
+          const detail = result.truncated
+            ? "The reply stopped mid-value, so it was almost certainly read before it had finished being written."
+            : result.error;
+          state.variables[`${target}Error`] = `${detail} Around the failure: ${result.excerpt}`;
+          throw new AutomationError({
+            errorCode: result.truncated ? "JSON_REPLY_TRUNCATED" : "JSON_PARSE_FAILED",
+            message:
+              `Could not parse ${node.config.sourceVariable ?? "the input"} as JSON: ${detail} ` +
+              `Around the failure: ${result.excerpt}`,
+            // Re-reading or re-asking genuinely can succeed, so this must not
+            // be filed as PERMANENT and strand a run that is one retry from
+            // working.
+            category: "TRANSIENT",
+            retryable: true,
+            stepId: node.id,
+          });
+        }
+
+        const missing = (node.config.require ?? []).filter((path) => {
+          const value = resolveVariablePath(path, result.value as Record<string, unknown>);
+          return value === undefined || value === null || (Array.isArray(value) && value.length === 0);
+        });
+        if (missing.length > 0) {
+          delete state.variables[target];
+          state.variables[`${target}Error`] = `The JSON parsed but is missing: ${missing.join(", ")}.`;
+          throw new AutomationError({
+            errorCode: "JSON_MISSING_FIELDS",
+            message: `The parsed JSON is missing required field(s): ${missing.join(", ")}.`,
+            category: "TRANSIENT",
+            retryable: true,
+            stepId: node.id,
+          });
+        }
+
+        state.variables[target] = result.value;
+        delete state.variables[`${target}Error`];
+        if (result.repairs.length > 0) {
+          this.ctx.hooks.log?.(`Parsed ${target} after repairing the reply: ${result.repairs.join("; ")}.`);
+        }
+        await this.complete(node, started, { repairs: result.repairs, requiredPresent: node.config.require ?? [] });
+        return { next: node.next ?? null };
+      }
+
       case "GET_VARIABLE": {
         const value = node.config.variableName ? state.variables[node.config.variableName] : undefined;
         await this.complete(node, started, { value });
@@ -223,7 +281,12 @@ export class WorkflowEngine {
       case "FAIL": {
         throw new AutomationError({
           errorCode: node.config.errorCode ?? "WORKFLOW_FAIL_NODE",
-          message: node.config.errorMessage ?? `Workflow explicitly failed at node "${node.id}"`,
+          // Interpolated, so a FAIL node can report the diagnostic the step
+          // that actually failed left behind instead of a fixed sentence that
+          // says nothing about this run.
+          message: node.config.errorMessage
+            ? interpolate(node.config.errorMessage, state.variables)
+            : `Workflow explicitly failed at node "${node.id}"`,
           category: node.config.category ?? "PERMANENT",
           retryable: node.config.retryable ?? false,
           stepId: node.id,

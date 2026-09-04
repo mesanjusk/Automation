@@ -4,6 +4,10 @@ const executeBrowserAction = vi.fn();
 
 vi.mock("@bos/browser", () => ({
   executeBrowserAction: (...args: unknown[]) => executeBrowserAction(...args),
+  interpolate: (template: string | undefined, variables: Record<string, unknown>) =>
+    (template ?? "").replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, path: string) =>
+      String(path.split(".").reduce<unknown>((acc, key) => (acc as Record<string, unknown>)?.[key], variables) ?? "")
+    ),
   BROWSER_NODE_TYPES: ["NAVIGATE", "CLICK", "TYPE", "EXTRACT_TEXT", "SCREENSHOT", "PROBE_PAGE", "SCROLL"],
 }));
 
@@ -126,6 +130,112 @@ describe("WorkflowEngine", () => {
     expect(result.status).toBe("completed");
     expect(result.variables.stockText).toEqual({ text: "In stock: 42" });
     expect(stepCompletions[0]).toMatchObject({ status: "SUCCESS", selectorStrategyUsed: "text" });
+  });
+
+  describe("PARSE_JSON", () => {
+    const parseDefinition = (config: Record<string, unknown>, continueOnError = false) =>
+      workflowDefinitionSchema.parse({
+        startNodeId: "parse",
+        nodes: [
+          { id: "parse", type: "PARSE_JSON", name: "Parse reply", config, next: "end", continueOnError },
+          { id: "end", type: "END", name: "Done", config: {} },
+        ],
+      });
+
+    const run = async (config: Record<string, unknown>, variables: Record<string, unknown>, continueOnError = false) => {
+      const definition = parseDefinition(config, continueOnError);
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks: makeHooks(), options: {}, downloadDir: "/tmp" });
+      return engine.run(definition.startNodeId, variables);
+    };
+
+    it("parses a reply out of a dotted source variable", async () => {
+      const result = await run(
+        { sourceVariable: "reply.result.text", variableName: "plan" },
+        { reply: { result: { text: '```json\n{"shots":[{"visual":"a"}]}\n```' } } }
+      );
+      expect(result.status).toBe("completed");
+      expect(result.variables.plan).toEqual({ shots: [{ visual: "a" }] });
+    });
+
+    it("repairs the unescaped quote that used to end the run", async () => {
+      const result = await run(
+        { sourceVariable: "reply", variableName: "plan" },
+        { reply: '{"visual":"a 6" tall idol"}' }
+      );
+      expect(result.status).toBe("completed");
+      expect(result.variables.plan).toEqual({ visual: 'a 6" tall idol' });
+    });
+
+    it("fails TRANSIENT and retryable, not PERMANENT, on an unusable reply", async () => {
+      // A bad generation is one retry from working; PERMANENT strands it.
+      const result = await run({ sourceVariable: "reply", variableName: "plan" }, { reply: "sorry, I can't." });
+      expect(result.status).toBe("failed");
+      expect(result.error?.category).toBe("TRANSIENT");
+      expect(result.error?.retryable).toBe(true);
+    });
+
+    it("distinguishes a reply that was read too early from one that is malformed", async () => {
+      const result = await run({ sourceVariable: "reply", variableName: "plan" }, { reply: '{"title":"x","shots":[{"a":"b' });
+      expect(result.error?.message).toMatch(/read before it had finished/);
+    });
+
+    it("reports required fields that the reply parsed but did not contain", async () => {
+      const result = await run(
+        { sourceVariable: "reply", variableName: "plan", require: ["shots"] },
+        { reply: '{"title":"no shots here"}' }
+      );
+      expect(result.status).toBe("failed");
+      expect(result.error?.message).toMatch(/missing required field\(s\): shots/);
+    });
+
+    it("treats an empty shots array as missing, not as a usable plan", async () => {
+      const result = await run(
+        { sourceVariable: "reply", variableName: "plan", require: ["shots"] },
+        { reply: '{"shots":[]}' }
+      );
+      expect(result.status).toBe("failed");
+    });
+
+    it("leaves the diagnostic behind so a later step can branch and report on it", async () => {
+      const result = await run(
+        { sourceVariable: "reply", variableName: "plan" },
+        { reply: "not json at all" },
+        true
+      );
+      // continueOnError lets the workflow reach its recovery branch.
+      expect(result.status).toBe("completed");
+      expect(result.variables.plan).toBeUndefined();
+      expect(String(result.variables.planError)).toMatch(/No JSON object/);
+    });
+
+    it("clears a stale diagnostic once a later parse succeeds", async () => {
+      const result = await run(
+        { sourceVariable: "reply", variableName: "plan" },
+        { reply: '{"shots":[1]}', planError: "an earlier failure" }
+      );
+      expect(result.variables.planError).toBeUndefined();
+    });
+  });
+
+  describe("FAIL", () => {
+    it("interpolates the diagnostic the failing step left behind", async () => {
+      const definition = workflowDefinitionSchema.parse({
+        startNodeId: "fail",
+        nodes: [
+          {
+            id: "fail",
+            type: "FAIL",
+            name: "Give up",
+            config: { errorCode: "PLAN_JSON_UNUSABLE", errorMessage: "Planner failed: {{planError}}", category: "TRANSIENT", retryable: true },
+          },
+        ],
+      });
+      const engine = new WorkflowEngine({ definition, session: {} as never, hooks: makeHooks(), options: {}, downloadDir: "/tmp" });
+      const result = await engine.run(definition.startNodeId, { planError: "unterminated string at position 4007" });
+
+      expect(result.error?.message).toBe("Planner failed: unterminated string at position 4007");
+      expect(result.error?.retryable).toBe(true);
+    });
   });
 
   describe("AI_DECISION resilience", () => {

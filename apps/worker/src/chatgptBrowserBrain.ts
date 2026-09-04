@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { AIRequest } from "@bos/database";
 import { agentActionSchema, type AgentAction } from "@bos/shared";
+import { buildFlowMission, renderFlowMission } from "./flowMission";
 import {
   captureAgentSnapshot,
   describeChanges,
@@ -31,12 +32,23 @@ interface BrainDecision {
   reason?: string;
 }
 
+/**
+ * Renders the mission the brain is working to.
+ *
+ * A structured plan is rendered shot by shot with each Flow prompt already
+ * composed, so the brain pastes a prompt rather than assembling one from raw
+ * JSON on every turn. Anything that is not a recognisable plan still gets
+ * through as-is — a run with a half-usable plan is worth more than no run.
+ */
 function compactMission(variables: Record<string, unknown>): string {
-  const plan = (variables.flowPlan as { result?: unknown } | undefined)?.result ?? variables.flowPlan ?? variables.idea ?? variables.input;
+  const mission = buildFlowMission(variables.flowPlan);
+  if (mission) return renderFlowMission(mission);
+
+  const fallback = variables.flowPlan ?? variables.idea ?? variables.input;
   try {
-    return JSON.stringify(plan, null, 2).slice(0, 11_000);
+    return JSON.stringify(fallback, null, 2).slice(0, 11_000);
   } catch {
-    return String(plan ?? "Complete the requested Google Flow video mission.").slice(0, 11_000);
+    return String(fallback ?? "Complete the requested Google Flow video mission.").slice(0, 11_000);
   }
 }
 

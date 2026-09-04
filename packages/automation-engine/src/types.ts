@@ -60,6 +60,12 @@ export interface EngineOptions {
   allowedAiDomains?: string[];
   visualFallback?: VisualFallback;
   resolveSecret?: (name: string) => Promise<string | undefined>;
+  /**
+   * Blocks a run in progress until a person confirms, without tearing the
+   * browser down the way a HUMAN_APPROVAL pause does. Used by WAIT_FOR_LOGIN
+   * so someone can sign in by hand in the same window the run continues in.
+   */
+  confirmWithHuman?: (prompt: string) => Promise<void>;
 }
 
 export type EngineRunStatus = "completed" | "failed" | "paused" | "cancelled";

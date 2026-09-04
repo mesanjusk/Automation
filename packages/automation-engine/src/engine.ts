@@ -104,6 +104,7 @@ export class WorkflowEngine {
             downloadDir: this.ctx.downloadDir,
             visualFallback: this.ctx.options.visualFallback,
             resolveSecret: this.ctx.options.resolveSecret,
+            confirmWithHuman: this.ctx.options.confirmWithHuman,
             emitScreenshot: this.ctx.hooks.onScreenshot?.bind(this.ctx.hooks),
             log: this.ctx.hooks.log?.bind(this.ctx.hooks),
           }),
@@ -440,6 +441,7 @@ export class WorkflowEngine {
           downloadDir: this.ctx.downloadDir,
           visualFallback: this.ctx.options.visualFallback,
           resolveSecret: this.ctx.options.resolveSecret,
+          confirmWithHuman: this.ctx.options.confirmWithHuman,
           emitScreenshot: this.ctx.hooks.onScreenshot?.bind(this.ctx.hooks),
           log: this.ctx.hooks.log?.bind(this.ctx.hooks),
         });

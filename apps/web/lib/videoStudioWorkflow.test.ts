@@ -52,7 +52,6 @@ describe("Video Studio workflow definition", () => {
   });
 
   it("plans with ChatGPT before it touches Flow, and keeps the plan in a variable", () => {
-    expect(byId.get("open_chatgpt")?.type).toBe("NAVIGATE");
     expect(byId.get("collect_plan_reply")?.type).toBe("EXECUTE_JS");
     expect(byId.get("parse_plan")?.config.variableName).toBe("flowPlan");
     // The Flow agent's brief has to reference the plan or the two halves are
@@ -122,10 +121,27 @@ describe("Video Studio workflow definition", () => {
     expect(byId.get("capture_plan")?.next).toBe("open_flow");
   });
 
-  it("opens Flow in its own tab so the planner conversation stays alive", () => {
+  it("waits for a person to sign in to both sites before it does anything", () => {
+    // The reported failure: the run reached Google Flow signed out and died as
+    // HUMAN_INTERVENTION_REQUIRED. Signing in is not automated — the run opens
+    // the tabs and waits.
+    expect(definition.startNodeId).toBe("manual_sign_in");
+    const gate = byId.get("manual_sign_in");
+    expect(gate?.type).toBe("WAIT_FOR_LOGIN");
+    expect(gate?.config.urls).toEqual(["https://chatgpt.com/", "https://labs.google/fx/tools/flow"]);
+    expect(String(gate?.config.message)).toMatch(/sign in to both/i);
+  });
+
+  it("reuses the signed-in Flow tab rather than opening a second, signed-out one", () => {
     const openFlow = byId.get("open_flow");
-    expect(openFlow?.type).toBe("NEW_TAB");
-    expect(openFlow?.config.url).toContain("labs.google");
+    expect(openFlow?.type).toBe("SWITCH_TAB");
+    expect(openFlow?.config.tabIndex).toBe(1);
+    // Nothing may re-open Flow in a fresh tab after the gate: that tab would
+    // not carry the sign-in the person just did.
+    const reopens = definition.nodes.filter(
+      (n) => n.type === "NEW_TAB" && String(n.config.url ?? "").includes("labs.google")
+    );
+    expect(reopens).toEqual([]);
   });
 
   it("captures screenshots either side of the agent run for the audit trail", () => {

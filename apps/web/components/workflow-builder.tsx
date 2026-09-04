@@ -29,7 +29,7 @@ const CATEGORIES: Record<string, NodeType[]> = {
   Data: ["EXTRACT_TEXT", "EXTRACT_ATTRIBUTE", "SCREENSHOT", "SET_VARIABLE", "GET_VARIABLE", "PARSE_JSON", "EXECUTE_JS"],
   Logic: ["CONDITION", "LOOP", "FOR_EACH", "END", "FAIL"],
   AI: ["AI_DECISION"],
-  Human: ["HUMAN_APPROVAL"],
+  Human: ["WAIT_FOR_LOGIN", "HUMAN_APPROVAL"],
   Integration: ["WEBHOOK"],
 };
 
@@ -320,7 +320,7 @@ function NodeEditor({ node, onChange }: { node: WorkflowNode; onChange: (patch: 
         <p className="mt-1 text-xs text-muted-foreground">
           Common fields: target ({`{ref,css,text,role,ariaLabel,testId,frame,nth,preferSemantic,editable}`}), value, url,
           variableName, condition, trueNodeId/falseNodeId, bodyNodeId/bodyEndNodeId/loopCount, text/absent (WAIT_FOR_TEXT),
-          sourceVariable/require (PARSE_JSON),
+          sourceVariable/require (PARSE_JSON), urls/message (WAIT_FOR_LOGIN),
           prompt (AI_DECISION), approvalMessage (HUMAN_APPROVAL), webhookUrl. Prefer role/text with preferSemantic over a
           generated CSS class — it survives a redesign. Mutating nodes wait for the page to settle afterwards; set
           settle: false (or settleMs) to change that.

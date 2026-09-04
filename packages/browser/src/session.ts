@@ -10,11 +10,14 @@ export interface ProfileOptions {
 
 let sharedBrowser: Browser | null = null;
 
+/** Whether Chromium runs without a visible window. Set PLAYWRIGHT_HEADLESS=false to watch, or to log in by hand. */
+export function isHeadless(): boolean {
+  return process.env.PLAYWRIGHT_HEADLESS !== "false";
+}
+
 async function getSharedBrowser(): Promise<Browser> {
   if (!sharedBrowser || !sharedBrowser.isConnected()) {
-    sharedBrowser = await chromium.launch({
-      headless: process.env.PLAYWRIGHT_HEADLESS !== "false",
-    });
+    sharedBrowser = await chromium.launch({ headless: isHeadless() });
   }
   return sharedBrowser;
 }
@@ -35,9 +38,16 @@ export class BrowserSession {
   context: BrowserContext;
   tabs: Page[] = [];
   activeTabIndex = 0;
+  /**
+   * Recorded at launch. Anything that asks a person to act in the browser —
+   * signing in by hand, solving a challenge — has to know there is a window
+   * for them to act in, and say so plainly when there is not.
+   */
+  readonly headless: boolean;
 
-  private constructor(context: BrowserContext, initialPage: Page) {
+  private constructor(context: BrowserContext, initialPage: Page, headless: boolean) {
     this.context = context;
+    this.headless = headless;
     this.tabs = [];
     this.track(initialPage);
     context.on("page", (page) => this.track(page));
@@ -79,7 +89,7 @@ export class BrowserSession {
     });
     context.setDefaultTimeout(30_000);
     const page = await context.newPage();
-    return new BrowserSession(context, page);
+    return new BrowserSession(context, page, isHeadless());
   }
 
   get activePage(): Page {

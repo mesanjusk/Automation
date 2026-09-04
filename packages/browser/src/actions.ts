@@ -21,6 +21,12 @@ export interface BrowserActionContext {
    * failure path where the step's own screenshot would never be returned.
    */
   emitScreenshot?: EmitScreenshot;
+  /**
+   * Blocks until a person says they are done. Supplied by the worker, which
+   * owns the terminal; the browser package only decides *when* to ask and
+   * *what* to say, so this stays testable and free of stdin plumbing.
+   */
+  confirmWithHuman?: (prompt: string) => Promise<void>;
   log?: (message: string) => void;
 }
 
@@ -47,6 +53,7 @@ export const BROWSER_NODE_TYPES: NodeType[] = [
   "WAIT_FOR_SELECTOR",
   "WAIT_FOR_NAVIGATION",
   "WAIT_FOR_TEXT",
+  "WAIT_FOR_LOGIN",
   "SCROLL_TO_ELEMENT",
   "EXTRACT_TEXT",
   "EXTRACT_ATTRIBUTE",
@@ -180,6 +187,93 @@ export async function executeBrowserAction(
         `Timed out after ${budget}ms waiting for the text ${JSON.stringify(needle)} to ` +
           `${wantAbsent ? "disappear from" : "appear on"} ${page.url()}.`
       );
+    }
+
+    case "WAIT_FOR_LOGIN": {
+      // Opens the sites a person has to be signed in to, then holds the run —
+      // and the browser — open until they say they are done.
+      //
+      // A HUMAN_APPROVAL pause cannot do this job: pausing ends the engine
+      // run, and the worker closes the browser on the way out, so the window
+      // the person was supposed to sign in to disappears before they can. This
+      // blocks *inside* the run instead, which is the only way the same tabs,
+      // cookies and session survive into the steps that follow.
+      if (session.headless) {
+        throw new Error(
+          "WAIT_FOR_LOGIN needs a browser window a person can actually use, but Chromium is running headless. " +
+            "Start the worker with PLAYWRIGHT_HEADLESS=false."
+        );
+      }
+      if (!ctx.confirmWithHuman) {
+        throw new Error(
+          "WAIT_FOR_LOGIN needs a way to ask a person to confirm, and none was provided. " +
+            "Run the worker interactively (npm run worker) so it can prompt at the terminal."
+        );
+      }
+
+      const urls = (cfg.urls ?? []).map((url) => interpolate(url, ctx.variables)).filter(Boolean);
+      const opened: Array<{ tabIndex: number; url: string }> = [];
+      for (const [index, url] of urls.entries()) {
+        // Reuse the tab the run already started in for the first site rather
+        // than leaving an empty about:blank tab behind.
+        if (index === 0 && session.tabs.length === 1) {
+          session.switchTab(0);
+          await session.activePage.goto(url, { waitUntil: "domcontentloaded", timeout: node.timeout || 60_000 });
+        } else {
+          await session.newTab(url);
+        }
+        opened.push({ tabIndex: session.activeTabIndex, url });
+        ctx.log?.(`Opened ${url} in tab ${session.activeTabIndex} for manual sign-in.`);
+      }
+
+      const describeTabs = async (): Promise<Array<{ tabIndex: number; url: string; title: string; looksSignedOut: boolean }>> => {
+        const rows = [];
+        for (const { tabIndex } of opened) {
+          const page = session.tabs[tabIndex];
+          if (!page || page.isClosed()) {
+            rows.push({ tabIndex, url: "(tab was closed)", title: "", looksSignedOut: true });
+            continue;
+          }
+          const url = page.url();
+          const title = await page.title().catch(() => "");
+          rows.push({ tabIndex, url, title, looksSignedOut: looksLikeSignIn(url, title) });
+        }
+        return rows;
+      };
+
+      const instructions = interpolate(cfg.message, ctx.variables) ||
+        "Sign in to each tab listed above in the Chrome window that just opened.";
+
+      let status = await describeTabs();
+      for (let round = 0; round < 2; round++) {
+        const prompt = [
+          "",
+          "================ MANUAL SIGN-IN REQUIRED ================",
+          instructions,
+          "",
+          ...status.map((tab) => `  tab ${tab.tabIndex}: ${tab.url}${tab.looksSignedOut ? "   <-- looks signed OUT" : "   (looks signed in)"}`),
+          "",
+          round === 0
+            ? "Sign in to each of them, leave the tabs open, then press Enter here to continue."
+            : "Some tabs still look signed out. Sign in and press Enter, or press Enter again to continue anyway.",
+          "=========================================================",
+          "",
+        ].join("\n");
+
+        await ctx.confirmWithHuman(prompt);
+        status = await describeTabs();
+        if (!status.some((tab) => tab.looksSignedOut)) break;
+      }
+
+      const stillOut = status.filter((tab) => tab.looksSignedOut).map((tab) => tab.url);
+      if (stillOut.length > 0) {
+        ctx.log?.(`Continuing with ${stillOut.length} tab(s) that still look signed out: ${stillOut.join(", ")}`);
+      }
+
+      // Hand back to the first tab so the steps after this start where they expect to.
+      if (opened.length > 0) session.switchTab(opened[0]!.tabIndex);
+      const buffer = cfg.screenshot === false ? undefined : await session.activePage.screenshot({ fullPage: false }).catch(() => undefined);
+      return { output: { tabs: status, signedOutTabs: stillOut }, screenshotBuffer: buffer };
     }
 
     case "SCROLL_TO_ELEMENT": {
@@ -387,6 +481,17 @@ async function resolveTargetOrThrow(
   }
   const target = interpolateTarget(node.config.target as Record<string, unknown>, ctx.variables);
   return resolveTarget(page, target, { timeout: timeout ?? node.timeout, visualFallback: ctx.visualFallback });
+}
+
+/**
+ * A rough read on whether a tab is still sitting on a sign-in wall.
+ *
+ * Only ever used to *warn* — the person at the keyboard decides when they are
+ * done, and a heuristic that blocked them would be worse than no heuristic.
+ */
+function looksLikeSignIn(url: string, title: string): boolean {
+  const haystack = `${url} ${title}`.toLowerCase();
+  return /accounts\.google\.com|\/signin|\/login|\/auth\b|servicelogin|sign in|log in|choose an account/.test(haystack);
 }
 
 function getVisualPoint(locator: unknown): { x: number; y: number } | null {

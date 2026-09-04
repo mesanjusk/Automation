@@ -137,15 +137,40 @@ const COLLECT_PLAN_SCRIPT = `async () => {
 }`;
 
 /**
- * USER IDEA -> ChatGPT production mission -> Google Flow -> adaptive browser
- * agent. The Flow half intentionally contains no product-specific state
- * machine or guessed textbox/New Project selector. AI_DECISION repeatedly
- * observes the live Flow page, asks the separate logged-in ChatGPT browser
- * brain for exactly one action, executes it, then observes again.
+ * MANUAL SIGN-IN -> USER IDEA -> ChatGPT production mission -> Google Flow ->
+ * adaptive browser agent.
+ *
+ * The run opens both sites and then waits for a person to sign in to each,
+ * because that is the one part that cannot be automated and should not be:
+ * no password is typed for you and no CAPTCHA or 2FA prompt is worked around.
+ * Everything after the gate reuses that same signed-in window.
+ *
+ * The Flow half intentionally contains no product-specific state machine or
+ * guessed textbox/New Project selector. AI_DECISION repeatedly observes the
+ * live Flow page, asks the separate logged-in ChatGPT browser brain for
+ * exactly one action, executes it, then observes again.
  */
 export function buildVideoStudioWorkflow(): WorkflowDefinition {
   const nodes: WorkflowNode[] = [
-    node({ id: "open_chatgpt", type: "NAVIGATE", name: "Open ChatGPT production planner", config: { url: "https://chatgpt.com/" }, next: "capture_chatgpt", timeout: 45_000, retry: RETRY_ONCE }),
+    // Both sites open first, then the run stops and waits for a person to sign
+    // in to each one. Signing in is deliberately not automated: no password is
+    // ever typed for you, and no CAPTCHA or 2FA prompt is ever worked around.
+    // The wait happens inside the run so the same window, tabs and cookies
+    // carry straight into the steps below.
+    node({
+      id: "manual_sign_in",
+      type: "WAIT_FOR_LOGIN",
+      name: "Sign in to ChatGPT and Google Flow",
+      config: {
+        urls: ["https://chatgpt.com/", "https://labs.google/fx/tools/flow"],
+        message: [
+          "Chrome is open with two tabs: ChatGPT (the production planner) and Google Flow (where the clips get made).",
+          "Sign in to BOTH, leave both tabs open, then come back here.",
+        ].join("\n"),
+      },
+      next: "capture_chatgpt",
+      timeout: 120_000,
+    }),
     node({ id: "capture_chatgpt", type: "SCREENSHOT", name: "Capture ChatGPT page", config: {}, next: "wait_chat_box", timeout: 15_000, continueOnError: true }),
     node({ id: "wait_chat_box", type: "WAIT_FOR_SELECTOR", name: "Wait for ChatGPT input", config: { target: CHATGPT_COMPOSER }, next: "type_master_prompt", timeout: 25_000 }),
     node({ id: "type_master_prompt", type: "TYPE", name: "Send idea to production planner", config: { target: CHATGPT_COMPOSER, value: masterPrompt() }, next: "submit_chatgpt", timeout: 25_000 }),
@@ -229,7 +254,9 @@ export function buildVideoStudioWorkflow(): WorkflowDefinition {
     }),
 
     node({ id: "capture_plan", type: "SCREENSHOT", name: "Capture production mission", config: {}, next: "open_flow", timeout: 15_000, continueOnError: true }),
-    node({ id: "open_flow", type: "NEW_TAB", name: "Open Google Flow", config: { url: "https://labs.google/fx/tools/flow" }, next: "flow_browser_agent", timeout: 60_000, retry: RETRY_ONCE }),
+    // Flow is already open and signed in from the gate above — switching to
+    // that tab keeps the session, rather than opening a second, signed-out one.
+    node({ id: "open_flow", type: "SWITCH_TAB", name: "Switch to the signed-in Google Flow tab", config: { tabIndex: 1 }, next: "flow_browser_agent", timeout: 15_000 }),
     node({
       id: "flow_browser_agent",
       type: "AI_DECISION",
@@ -244,5 +271,5 @@ export function buildVideoStudioWorkflow(): WorkflowDefinition {
     node({ id: "done", type: "END", name: "Video mission completed", config: {}, timeout: 0 }),
   ];
 
-  return { startNodeId: "open_chatgpt", variables: {}, edges: [], nodes };
+  return { startNodeId: "manual_sign_in", variables: {}, edges: [], nodes };
 }
